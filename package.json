@@ -33,6 +33,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "resources/puppeteer",
+        "to": "puppeteer",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {
@@ -56,6 +63,7 @@
     }
   },
   "dependencies": {
+    "@puppeteer/browsers": "^2.10.13",
     "fs-extra": "^11.3.2",
     "get-port": "^5.1.1",
     "js-base64": "^3.7.8",

@@ -1,19 +1,20 @@
 const { app, BrowserWindow, ipcMain, dialog, screen, shell } = require('electron');
 const path = require('path');
 const fs = require('fs-extra');
-const { spawn, exec } = require('child_process');// 增加 exec 用于解压
-const https = require('https'); // 用于下载
-const os = require('os'); // 用于判断系统
+const { spawn, exec } = require('child_process');
 const treeKill = require('tree-kill');
 const getPort = require('get-port');
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const { v4: uuidv4 } = require('uuid');
 const yaml = require('js-yaml');
-const { executablePath } = require('puppeteer');
+const { executablePath } = require('puppeteer'); // 这个保留作为兜底，但在打包版中主要靠下面的自定义函数
 const { SocksProxyAgent } = require('socks-proxy-agent');
 const http = require('http');
+const https = require('https');
+const os = require('os');
 
+// 1. 禁用硬件加速
 app.disableHardwareAcceleration();
 
 const { generateXrayConfig } = require('./utils');
@@ -22,6 +23,8 @@ const { generateFingerprint } = require('./fingerprint');
 puppeteer.use(StealthPlugin());
 
 const isDev = !app.isPackaged;
+
+// Xray 二进制路径
 const BIN_PATH = isDev 
     ? path.join(__dirname, 'resources', 'bin', process.platform === 'win32' ? 'xray.exe' : 'xray')
     : path.join(process.resourcesPath, 'bin', process.platform === 'win32' ? 'xray.exe' : 'xray');
@@ -36,6 +39,58 @@ fs.ensureDirSync(TRASH_PATH);
 
 let activeProcesses = {}; 
 
+// --- 核心辅助函数：智能获取 Chrome 路径 ---
+// main.js
+
+function getChromiumPath() {
+    const basePath = isDev 
+        ? path.join(__dirname, 'resources', 'puppeteer')
+        : path.join(process.resourcesPath, 'puppeteer');
+
+    // 调试日志：打印基准路径
+    console.log(`[Chromium Search] Base Path: ${basePath}`);
+
+    if (!fs.existsSync(basePath)) {
+        console.error(`[Chromium Search] Error: Base path does not exist.`);
+        return null;
+    }
+
+    function findFile(dir, filename) {
+        try {
+            const files = fs.readdirSync(dir);
+            for (const file of files) {
+                const fullPath = path.join(dir, file);
+                const stat = fs.statSync(fullPath);
+                if (stat.isDirectory()) {
+                    const result = findFile(fullPath, filename);
+                    if (result) return result;
+                } else if (file === filename) {
+                    return fullPath;
+                }
+            }
+        } catch (e) {
+            console.error(`[Chromium Search] Access error in ${dir}: ${e.message}`);
+        }
+        return null;
+    }
+
+    const targetName = process.platform === 'win32' ? 'chrome.exe' : 'chrome';
+    const exePath = findFile(basePath, targetName);
+    
+    if (!exePath) {
+        // 如果找不到，打印一下 resources/puppeteer 里面的第一层文件，方便排查
+        try {
+            const list = fs.readdirSync(basePath);
+            console.error(`[Chromium Search] Failed. Contents of ${basePath}:`, list);
+        } catch(e) {}
+        console.error(`[Chromium Search] FATAL: ${targetName} not found in recursive search.`);
+    } else {
+        console.log(`[Chromium Search] Found at: ${exePath}`);
+    }
+    
+    return exePath;
+}
+
 function createWindow() {
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width: screenW, height: screenH } = primaryDisplay.workAreaSize;
@@ -46,18 +101,13 @@ function createWindow() {
         width: winW, height: winH, minWidth: 800, minHeight: 600,
         title: "GeekEZ Browser", 
         backgroundColor: '#1e1e2d',
-        // 核心修改：启用自定义标题栏颜色 (仅 Windows 生效，Mac/Linux 忽略)
-		// 核心修改：指向根目录的 icon.png
-        // Windows 其实也能识别 png 作为窗口图标，比 ico 兼容性更好
-		icon: path.join(__dirname, 'icon.png'),
+        icon: path.join(__dirname, 'icon.png'),
         titleBarOverlay: {
-            color: '#1e1e2d', // 初始颜色 (Geek模式)
+            color: '#1e1e2d', 
             symbolColor: '#ffffff',
-            height: 35 // 稍微调高一点，方便点击
+            height: 35
         },
-        // 隐藏默认菜单栏，但保留窗口控制按钮
         titleBarStyle: 'hidden', 
-        
         webPreferences: { 
             preload: path.join(__dirname, 'preload.js'), 
             contextIsolation: true, 
@@ -66,10 +116,9 @@ function createWindow() {
         }
     });
     
-    // 移除原生菜单 (Windows/Linux)
     win.setMenuBarVisibility(false);
     win.loadFile('index.html');
-    return win; // 返回 win 对象以便后续使用
+    return win;
 }
 
 app.whenReady().then(() => {
@@ -78,8 +127,6 @@ app.whenReady().then(() => {
 });
 
 // --- 注入脚本 ---
-// main.js 中的 createInjectionScript 函数
-
 const createInjectionScript = (fp, profileName) => {
     if (!fp) return "";
     const fpJson = JSON.stringify(fp);
@@ -91,7 +138,6 @@ const createInjectionScript = (fp, profileName) => {
             const fp = ${fpJson};
             const profileName = ${nameJson};
 
-            // --- 0. Native Code 伪装工具 (Anti-detection) ---
             const nativeToString = Function.prototype.toString;
             function proxyToString(fn, nativeStr) {
                 const toStringProxy = new Proxy(nativeToString, {
@@ -103,49 +149,38 @@ const createInjectionScript = (fp, profileName) => {
                 Object.defineProperty(fn, 'toString', { value: toStringProxy });
             }
 
-            // --- 1. Navigator Spoofing (UA, Platform, Hardware) ---
-            // 使用 Object.defineProperty 覆盖只读属性
             Object.defineProperty(navigator, 'userAgent', { get: () => fp.userAgent });
-            Object.defineProperty(navigator, 'platform', { get: () => fp.platform }); // 关键：Win32 / MacIntel
+            Object.defineProperty(navigator, 'platform', { get: () => fp.platform });
             Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => fp.hardwareConcurrency });
             Object.defineProperty(navigator, 'deviceMemory', { get: () => fp.deviceMemory });
-            
-            // 语言伪装 (根据 Platform 简单推断，生产环境可做的更细)
+
             const lang = fp.platform.includes('Mac') ? ['en-US', 'en'] : ['en-US', 'en']; 
             Object.defineProperty(navigator, 'languages', { get: () => lang });
             Object.defineProperty(navigator, 'language', { get: () => lang[0] });
-
-            // --- 2. Screen Spoofing ---
+            
             const screenProps = {
                 width: fp.screen.width, height: fp.screen.height,
-                availWidth: fp.screen.width, availHeight: fp.screen.height, // 简化处理，通常要减去任务栏
+                availWidth: fp.screen.width, availHeight: fp.screen.height,
                 colorDepth: 24, pixelDepth: 24
             };
             for (const prop in screenProps) {
                 Object.defineProperty(screen.prototype, prop, { get: () => screenProps[prop] });
             }
 
-            // --- 3. WebGL Parameter Spoofing ---
             const getParameter = WebGLRenderingContext.prototype.getParameter;
             WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                // UNMASKED_VENDOR_WEBGL
                 if (parameter === 37445) return fp.webgl.vendor;
-                // UNMASKED_RENDERER_WEBGL
                 if (parameter === 37446) return fp.webgl.renderer;
                 return getParameter.apply(this, arguments);
             };
             proxyToString(WebGLRenderingContext.prototype.getParameter, "function getParameter() { [native code] }");
 
-            // --- 4. Canvas Fingerprint Noise ---
             const getImageData = CanvasRenderingContext2D.prototype.getImageData;
             CanvasRenderingContext2D.prototype.getImageData = function(x, y, w, h) {
                 const imageData = getImageData.apply(this, arguments);
-                // 使用 noiseSeed 确定性地添加微小噪音
                 if (fp.noiseSeed) {
                     for (let i = 0; i < imageData.data.length; i += 4) {
-                        // 仅修改 Alpha 通道或 Blue 通道，且间隔修改，降低性能损耗
                         if ((i + fp.noiseSeed) % 53 === 0) {
-                            // 加上 fp.canvasNoise 的随机扰动
                             const noise = fp.canvasNoise ? (fp.canvasNoise.b || 0) : 0;
                             imageData.data[i+2] = Math.min(255, Math.max(0, imageData.data[i+2] + noise));
                         }
@@ -157,18 +192,14 @@ const createInjectionScript = (fp, profileName) => {
 
             const toDataURL = HTMLCanvasElement.prototype.toDataURL;
             HTMLCanvasElement.prototype.toDataURL = function(type) {
-                // 由于 getImageData 已经被 Hook，toDataURL 依赖底层数据，通常也会带上噪音。
-                // 这里的 Hook 主要是为了防检测 toString
                 return toDataURL.apply(this, arguments);
             };
             proxyToString(HTMLCanvasElement.prototype.toDataURL, "function toDataURL() { [native code] }");
 
-            // --- 5. AudioContext Noise ---
             const originalGetChannelData = AudioBuffer.prototype.getChannelData;
             AudioBuffer.prototype.getChannelData = function(channel) {
                 const results = originalGetChannelData.apply(this, arguments);
                 const noise = fp.audioNoise || 0.00001;
-                // 遍历音频数据添加微小噪音
                 for (let i = 0; i < results.length; i += 100) {
                     results[i] = results[i] + noise;
                 }
@@ -176,7 +207,6 @@ const createInjectionScript = (fp, profileName) => {
             };
             proxyToString(AudioBuffer.prototype.getChannelData, "function getChannelData() { [native code] }");
 
-            // --- 6. UI Indicator (标题与水印) ---
             const updateTitle = () => {
                 if(!document.title.startsWith("[" + profileName + "]")) {
                     document.title = "[" + profileName + "] " + document.title;
@@ -194,50 +224,138 @@ const createInjectionScript = (fp, profileName) => {
     `;
 };
 
-// --- IPC ---
+// --- IPC Handles ---
+
+// 1. 订阅获取
 ipcMain.handle('fetch-url', async (e, url) => {
     try {
         const response = await fetch(url);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return await response.text();
-    } catch (error) { throw error.message; }
+    } catch (error) {
+        throw error.message;
+    }
 });
 
+// 2. 代理延迟测试
 ipcMain.handle('test-proxy-latency', async (e, proxyStr) => {
     const tempPort = await getPort();
     const tempConfigPath = path.join(app.getPath('userData'), `test_config_${tempPort}.json`);
+    
     try {
         let outbound;
         try {
             const { parseProxyLink } = require('./utils');
             outbound = parseProxyLink(proxyStr, "proxy_test");
         } catch (err) { return { success: false, msg: "Format Err" }; }
+
         const config = {
             log: { loglevel: "none" },
             inbounds: [{ port: tempPort, listen: "127.0.0.1", protocol: "socks", settings: { udp: true } }],
             outbounds: [outbound, { protocol: "freedom", tag: "direct" }],
             routing: { rules: [{ type: "field", outboundTag: "proxy_test", port: "0-65535" }] }
         };
+        
         await fs.writeJson(tempConfigPath, config);
-        const xrayProcess = spawn(BIN_PATH, ['-c', tempConfigPath], { cwd: path.dirname(BIN_PATH), stdio: 'ignore' });
+
+        const xrayProcess = spawn(BIN_PATH, ['-c', tempConfigPath], { 
+            cwd: path.dirname(BIN_PATH), stdio: 'ignore' 
+        });
+
         await new Promise(r => setTimeout(r, 800));
+
         const start = Date.now();
         const agent = new SocksProxyAgent(`socks5://127.0.0.1:${tempPort}`);
+        
         const result = await new Promise((resolve) => {
             const req = http.get('http://cp.cloudflare.com/generate_204', { agent, timeout: 5000 }, (res) => {
                 const latency = Date.now() - start;
                 if (res.statusCode === 204) resolve({ success: true, latency });
                 else resolve({ success: false, msg: `HTTP ${res.statusCode}` });
             });
-            req.on('error', () => resolve({ success: false, msg: "Err" }));
+            req.on('error', () => resolve({ success: false, msg: "Err/Timeout" }));
             req.on('timeout', () => { req.destroy(); resolve({ success: false, msg: "Timeout" }); });
         });
+
         treeKill(xrayProcess.pid);
         try { fs.unlinkSync(tempConfigPath); } catch(e){}
         return result;
-    } catch (err) { return { success: false, msg: err.message }; }
+    } catch (err) {
+        return { success: false, msg: err.message };
+    }
 });
 
+// 3. 更新相关
+ipcMain.handle('set-title-bar-color', (e, colors) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (win) {
+        if (process.platform === 'win32') {
+            try {
+                win.setTitleBarOverlay({ color: colors.bg, symbolColor: colors.symbol });
+            } catch(e) {}
+        }
+        win.setBackgroundColor(colors.bg);
+    }
+});
+
+ipcMain.handle('check-app-update', async () => {
+    const currentVer = app.getVersion();
+    try {
+        const data = await fetchJson('https://api.github.com/repos/EchoHS/GeekezBrowser/releases/latest');
+        if (!data || !data.tag_name) return { update: false };
+        const remoteVer = data.tag_name.replace('v', ''); 
+        if (compareVersions(remoteVer, currentVer) > 0) {
+            shell.openExternal(data.html_url);
+            return { update: true, remote: remoteVer };
+        }
+        return { update: false };
+    } catch (e) { return { update: false, error: e.message }; }
+});
+
+ipcMain.handle('check-xray-update', async () => {
+    try {
+        const data = await fetchJson('https://api.github.com/repos/XTLS/Xray-core/releases/latest');
+        if(!data || !data.tag_name) return { update: false };
+        const remoteVer = data.tag_name; 
+        const currentVer = await getLocalXrayVersion();
+        if (remoteVer !== currentVer) {
+            let assetName = '';
+            const arch = os.arch();
+            const platform = os.platform();
+            if (platform === 'win32') assetName = `Xray-windows-${arch==='x64'?'64':'32'}.zip`;
+            else if (platform === 'darwin') assetName = `Xray-macos-${arch==='arm64'?'arm64-v8a':'64'}.zip`;
+            else assetName = `Xray-linux-${arch==='x64'?'64':'32'}.zip`;
+            const downloadUrl = `https://gh-proxy.com/https://github.com/XTLS/Xray-core/releases/download/${remoteVer}/${assetName}`;
+            return { update: true, remote: remoteVer, downloadUrl };
+        }
+        return { update: false };
+    } catch (e) { return { update: false }; }
+});
+
+ipcMain.handle('download-xray-update', async (e, url) => {
+    const zipPath = path.join(path.dirname(BIN_PATH), 'update_xray.zip');
+    const destDir = path.dirname(BIN_PATH);
+    try {
+        await downloadFile(url, zipPath);
+        if (process.platform === 'win32') {
+            try { await new Promise((resolve) => exec('taskkill /F /IM xray.exe', () => resolve())); } catch(e){}
+        } else {
+            try { await new Promise((resolve) => exec('pkill xray', () => resolve())); } catch(e){}
+        }
+        activeProcesses = {};
+        await new Promise(r => setTimeout(r, 1000));
+        await extractZip(zipPath, destDir);
+        fs.unlinkSync(zipPath);
+        if (process.platform !== 'win32') fs.chmodSync(BIN_PATH, '755');
+        return true;
+    } catch (e) {
+        console.error("Xray Update Failed:", e);
+        try { if(fs.existsSync(zipPath)) fs.unlinkSync(zipPath); } catch(err){}
+        return false;
+    }
+});
+
+// 4. 常规业务
 ipcMain.handle('get-running-ids', () => Object.keys(activeProcesses));
 ipcMain.handle('get-profiles', async () => { if (!fs.existsSync(PROFILES_FILE)) return []; return fs.readJson(PROFILES_FILE); });
 ipcMain.handle('update-profile', async (event, updatedProfile) => {
@@ -267,32 +385,59 @@ ipcMain.handle('delete-profile', async (event, id) => {
 ipcMain.handle('get-settings', async () => { if (fs.existsSync(SETTINGS_FILE)) return fs.readJson(SETTINGS_FILE); return { preProxies: [], mode: 'single', enablePreProxy: false }; });
 ipcMain.handle('save-settings', async (e, settings) => { await fs.writeJson(SETTINGS_FILE, settings); return true; });
 ipcMain.handle('open-url', async (e, url) => { await shell.openExternal(url); });
-ipcMain.handle('export-profile', async (e, profileId) => {
-    const profiles = await fs.readJson(PROFILES_FILE);
-    const profile = profiles.find(p => p.id === profileId);
-    if(!profile) return false;
-    const { filePath } = await dialog.showSaveDialog({ title: 'Export Profile', defaultPath: `${profile.name}.yml`, filters: [{ name: 'YAML', extensions: ['yml', 'yaml'] }] });
-    if (filePath) { const exportData = { ...profile }; delete exportData.id; await fs.writeFile(filePath, yaml.dump(exportData)); return true; }
+ipcMain.handle('export-data', async (e, type) => {
+    const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+    const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
+    let exportObj = {};
+    if (type === 'all' || type === 'profiles') exportObj.profiles = profiles;
+    if (type === 'all' || type === 'proxies') { exportObj.preProxies = settings.preProxies || []; exportObj.subscriptions = settings.subscriptions || []; }
+    if (Object.keys(exportObj).length === 0) return false;
+    const { filePath } = await dialog.showSaveDialog({ title: 'Export Data', defaultPath: `GeekEZ_Backup_${type}_${Date.now()}.yaml`, filters: [{ name: 'YAML', extensions: ['yml', 'yaml'] }] });
+    if (filePath) { await fs.writeFile(filePath, yaml.dump(exportObj)); return true; }
     return false;
 });
-ipcMain.handle('import-profile', async () => {
+ipcMain.handle('import-data', async () => {
     const { filePaths } = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: 'YAML', extensions: ['yml', 'yaml'] }] });
     if (filePaths && filePaths.length > 0) {
         try {
             const content = await fs.readFile(filePaths[0], 'utf8');
             const data = yaml.load(content);
-            if(data.name && data.proxyStr && data.fingerprint) {
+            let updated = false;
+            if (data.profiles || data.preProxies || data.subscriptions) {
+                if (Array.isArray(data.profiles)) {
+                    const currentProfiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+                    data.profiles.forEach(p => {
+                        const idx = currentProfiles.findIndex(cp => cp.id === p.id);
+                        if (idx > -1) currentProfiles[idx] = p; else { if(!p.id) p.id = uuidv4(); currentProfiles.push(p); }
+                    });
+                    await fs.writeJson(PROFILES_FILE, currentProfiles); updated = true;
+                }
+                if (Array.isArray(data.preProxies) || Array.isArray(data.subscriptions)) {
+                    const currentSettings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
+                    if(data.preProxies) {
+                        if(!currentSettings.preProxies) currentSettings.preProxies = [];
+                        data.preProxies.forEach(p => { if(!currentSettings.preProxies.find(cp => cp.id === p.id)) currentSettings.preProxies.push(p); });
+                    }
+                    if(data.subscriptions) {
+                        if(!currentSettings.subscriptions) currentSettings.subscriptions = [];
+                        data.subscriptions.forEach(s => { if(!currentSettings.subscriptions.find(cs => cs.id === s.id)) currentSettings.subscriptions.push(s); });
+                    }
+                    await fs.writeJson(SETTINGS_FILE, currentSettings); updated = true;
+                }
+            } else if (data.name && data.proxyStr && data.fingerprint) {
                 const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
                 const newProfile = { ...data, id: uuidv4(), isSetup: false, createdAt: Date.now() };
                 profiles.push(newProfile);
                 await fs.writeJson(PROFILES_FILE, profiles);
-                return true;
+                updated = true;
             }
-        } catch (e) { console.error(e); }
+            return updated;
+        } catch (e) { console.error(e); throw e; }
     }
     return false;
 });
 
+// 5. 启动配置
 ipcMain.handle('launch-profile', async (event, profileId) => {
     const sender = event.sender;
     if (activeProcesses[profileId]) {
@@ -341,6 +486,7 @@ ipcMain.handle('launch-profile', async (event, profileId) => {
         const userDataDir = path.join(profileDir, 'browser_data');
         const xrayConfigPath = path.join(profileDir, 'config.json');
         fs.ensureDirSync(userDataDir);
+
         try {
             const defaultProfileDir = path.join(userDataDir, 'Default');
             fs.ensureDirSync(defaultProfileDir);
@@ -355,6 +501,7 @@ ipcMain.handle('launch-profile', async (event, profileId) => {
 
         const config = generateXrayConfig(profile.proxyStr, localPort, finalPreProxyConfig);
         fs.writeJsonSync(xrayConfigPath, config);
+
         const xrayProcess = spawn(BIN_PATH, ['-c', xrayConfigPath], { cwd: path.dirname(BIN_PATH), stdio: 'ignore' });
         
         const launchArgs = [
@@ -365,12 +512,24 @@ ipcMain.handle('launch-profile', async (event, profileId) => {
             '--disable-blink-features=AutomationControlled', 
             '--disable-infobars', '--disable-features=IsolateOrigins,site-per-process'
         ];
+
+        // --- 核心修改：使用智能查找的 Chrome 路径 ---
+        const chromePath = getChromiumPath();
+        if (!chromePath) {
+            throw new Error("Chrome binary not found. Please ensure 'resources/puppeteer' exists.");
+        }
+
         const browser = await puppeteer.launch({
-            headless: false, executablePath: executablePath(), userDataDir: userDataDir,
-            args: launchArgs, defaultViewport: null, ignoreDefaultArgs: ['--enable-automation'],
+            headless: false,
+            executablePath: chromePath, // 使用计算出的路径
+            userDataDir: userDataDir,
+            args: launchArgs,
+            defaultViewport: null,
+            ignoreDefaultArgs: ['--enable-automation'],
             pipe: false, dumpio: false 
         });
 
+        // Auto Rename Logic (Same as before)
         if (!profile.isSetup) {
             try {
                 const setupPage = await browser.newPage();
@@ -415,185 +574,44 @@ ipcMain.handle('launch-profile', async (event, profileId) => {
                 if (!sender.isDestroyed()) sender.send('profile-status', { id: profileId, status: 'stopped' });
             }
         });
+
         return switchMsg; 
     } catch (err) { console.error(err); throw err; }
 });
 
-// 1. 设置标题栏颜色
-ipcMain.handle('set-title-bar-color', (e, colors) => {
-    const win = BrowserWindow.fromWebContents(e.sender);
-    if (win) {
-        // Windows 专用 API
-        if (process.platform === 'win32') {
-            win.setTitleBarOverlay({
-                color: colors.bg,
-                symbolColor: colors.symbol
-            });
-        }
-        // 通用背景色设置 (防止加载闪烁)
-        win.setBackgroundColor(colors.bg);
-    }
+app.on('window-all-closed', () => {
+    Object.values(activeProcesses).forEach(p => treeKill(p.xrayPid));
+    if (process.platform !== 'darwin') app.quit();
 });
 
-// 2. 检查 APP 更新
-ipcMain.handle('check-app-update', async () => {
-    const currentVer = app.getVersion();
-    try {
-        // 增加容错：如果 fetch 失败或解析失败，直接捕获
-        const data = await fetchJson('https://api.github.com/repos/EchoHS/GeekezBrowser/releases/latest');
-        
-        // 核心修复：检查 data 和 tag_name 是否存在
-        if (!data || !data.tag_name) {
-            console.warn("No release info found or API limit exceeded.");
-            return { update: false };
-        }
-
-        const remoteVer = data.tag_name.replace('v', ''); 
-        
-        if (compareVersions(remoteVer, currentVer) > 0) {
-            shell.openExternal(data.html_url);
-            return { update: true, remote: remoteVer };
-        }
-        return { update: false };
-    } catch (e) {
-        console.error("Check App Update Failed:", e.message); // 只打印消息，防止炸主进程
-        return { update: false, error: e.message };
-    }
-});
-
-// 3. 检查 Xray 更新
-ipcMain.handle('check-xray-update', async () => {
-    // 这里我们硬编码一个当前 Xray 版本，或者读取文件
-    // 简单起见，我们假设当前是 v1.8.4，去查最新版
-    // 更好的做法是运行 bin/xray -version 获取，但这里为了速度直接查 API
-    try {
-        const data = await fetchJson('https://api.github.com/repos/XTLS/Xray-core/releases/latest');
-        const remoteVer = data.tag_name; // v1.8.x
-        
-        // 获取当前 Xray 版本 (通过执行命令)
-        const currentVer = await getLocalXrayVersion();
-        
-        if (remoteVer !== currentVer) {
-            // 构造下载链接
-            let assetName = '';
-            const arch = os.arch();
-            const platform = os.platform();
-            if (platform === 'win32') assetName = `Xray-windows-${arch==='x64'?'64':'32'}.zip`;
-            else if (platform === 'darwin') assetName = `Xray-macos-${arch==='arm64'?'arm64-v8a':'64'}.zip`;
-            else assetName = `Xray-linux-${arch==='x64'?'64':'32'}.zip`;
-
-            // 使用加速镜像 (可选)
-            const downloadUrl = `https://gh-proxy.com/https://github.com/XTLS/Xray-core/releases/download/${remoteVer}/${assetName}`;
-            return { update: true, remote: remoteVer, downloadUrl };
-        }
-        return { update: false };
-    } catch (e) {
-        return { update: false };
-    }
-});
-
-// 4. 下载并更新 Xray
-// main.js - 修复 download-xray-update
-
-ipcMain.handle('download-xray-update', async (e, url) => {
-    const zipPath = path.join(path.dirname(BIN_PATH), 'update_xray.zip');
-    const destDir = path.dirname(BIN_PATH);
-    
-    try {
-        // 1. 下载文件
-        await downloadFile(url, zipPath);
-        
-        // 2. 核心修复：强制终止所有 Xray 进程
-        // 仅依赖 activeProcesses 可能会漏掉僵尸进程
-        if (process.platform === 'win32') {
-            try {
-                // 使用 taskkill 强制杀掉名为 xray.exe 的进程
-                await new Promise((resolve) => {
-                    exec('taskkill /F /IM xray.exe', () => resolve()); 
-                });
-            } catch(e) {}
-        } else {
-            try {
-                await new Promise((resolve) => {
-                    exec('pkill xray', () => resolve());
-                });
-            } catch(e) {}
-        }
-        
-        // 清空记录
-        activeProcesses = {};
-
-        // 3. 等待文件锁释放 (关键)
-        await new Promise(r => setTimeout(r, 1000));
-
-        // 4. 解压覆盖
-        await extractZip(zipPath, destDir);
-        
-        // 5. 清理压缩包
-        fs.unlinkSync(zipPath);
-        
-        // 6. 权限修复 (Linux/Mac)
-        if (process.platform !== 'win32') fs.chmodSync(BIN_PATH, '755');
-        
-        return true;
-    } catch (e) {
-        console.error("Xray Update Failed:", e);
-        // 如果失败，尝试删除临时文件
-        try { if(fs.existsSync(zipPath)) fs.unlinkSync(zipPath); } catch(err){}
-        return false;
-    }
-});
-
-// --- 辅助函数 ---
-
+// Helpers for Update
 function fetchJson(url) {
     return new Promise((resolve, reject) => {
         const req = https.get(url, { headers: {'User-Agent': 'GeekEZ-Browser'} }, (res) => {
-            let data = '';
-            res.on('data', c => data += c);
-            res.on('end', () => {
-                try { resolve(JSON.parse(data)); } catch(e) { reject(e); }
-            });
+            let data = ''; res.on('data', c => data += c); res.on('end', () => { try { resolve(JSON.parse(data)); } catch(e) { reject(e); } });
         });
         req.on('error', reject);
     });
 }
 
-// main.js - 修复 getLocalXrayVersion
-
 function getLocalXrayVersion() {
     return new Promise((resolve) => {
         if (!fs.existsSync(BIN_PATH)) return resolve('v0.0.0');
-        
-        // 增加 try-catch 防止 spawn 异常
         try {
             const proc = spawn(BIN_PATH, ['-version']);
-            let output = '';
-            proc.stdout.on('data', d => output += d.toString());
-            
+            let output = ''; proc.stdout.on('data', d => output += d.toString());
             proc.on('close', () => {
-                // 修复正则：兼容 "Xray 1.8.4" 和 "Xray v1.8.4"
-                // 输出示例：Xray 1.8.4 (Xray, Penetrates Everything.) Custom ...
                 const match = output.match(/Xray\s+v?(\d+\.\d+\.\d+)/i);
-                const ver = match ? match[1] : 'v0.0.0';
-                // 统一格式为 vX.X.X
-                resolve(ver.startsWith('v') ? ver : `v${ver}`);
+                resolve(match ? (match[1].startsWith('v')?match[1]:'v'+match[1]) : 'v0.0.0');
             });
-            
             proc.on('error', () => resolve('v0.0.0'));
-        } catch (e) {
-            resolve('v0.0.0');
-        }
+        } catch(e) { resolve('v0.0.0'); }
     });
 }
 
 function compareVersions(v1, v2) {
-    const p1 = v1.split('.').map(Number);
-    const p2 = v2.split('.').map(Number);
-    for (let i = 0; i < 3; i++) {
-        if ((p1[i] || 0) > (p2[i] || 0)) return 1;
-        if ((p1[i] || 0) < (p2[i] || 0)) return -1;
-    }
+    const p1 = v1.split('.').map(Number); const p2 = v2.split('.').map(Number);
+    for (let i = 0; i < 3; i++) { if ((p1[i]||0) > (p2[i]||0)) return 1; if ((p1[i]||0) < (p2[i]||0)) return -1; }
     return 0;
 }
 
@@ -601,12 +619,10 @@ function downloadFile(url, dest) {
     return new Promise((resolve, reject) => {
         const file = fs.createWriteStream(dest);
         https.get(url, (response) => {
-            if (response.statusCode === 302 || response.statusCode === 301) {
-                downloadFile(response.headers.location, dest).then(resolve).catch(reject);
-                return;
+            if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                downloadFile(response.headers.location, dest).then(resolve).catch(reject); return;
             }
-            response.pipe(file);
-            file.on('finish', () => file.close(resolve));
+            response.pipe(file); file.on('finish', () => file.close(resolve));
         }).on('error', (err) => { fs.unlink(dest, ()=>{}); reject(err); });
     });
 }
@@ -614,136 +630,9 @@ function downloadFile(url, dest) {
 function extractZip(zipPath, destDir) {
     return new Promise((resolve, reject) => {
         if (os.platform() === 'win32') {
-            exec(`powershell -command "Expand-Archive -Path '${zipPath}' -DestinationPath '${destDir}' -Force"`, (err) => {
-                if (err) reject(err); else resolve();
-            });
+            exec(`powershell -command "Expand-Archive -Path '${zipPath}' -DestinationPath '${destDir}' -Force"`, (err) => { if (err) reject(err); else resolve(); });
         } else {
-            exec(`unzip -o "${zipPath}" -d "${destDir}"`, (err) => {
-                if (err) reject(err); else resolve();
-            });
+            exec(`unzip -o "${zipPath}" -d "${destDir}"`, (err) => { if (err) reject(err); else resolve(); });
         }
     });
 }
-
-// --- Export Logic ---
-ipcMain.handle('export-data', async (e, type) => {
-    const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
-    const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
-    
-    let exportObj = {};
-    
-    if (type === 'all' || type === 'profiles') {
-        // 导出 Profile 时，移除 id 以便导入时重新生成（避免冲突），或者保留 id 用于迁移？
-        // 通常为了迁移，保留 id，但在本机导入时如果有同 id 应覆盖或跳过。
-        // 这里简单起见，原样导出。
-        exportObj.profiles = profiles;
-    }
-    
-    if (type === 'all' || type === 'proxies') {
-        exportObj.preProxies = settings.preProxies || [];
-        exportObj.subscriptions = settings.subscriptions || [];
-    }
-
-    // 只有当有数据时才保存
-    if (Object.keys(exportObj).length === 0) return false;
-
-    const { filePath } = await dialog.showSaveDialog({
-        title: 'Export Data',
-        defaultPath: `GeekEZ_Backup_${type}_${Date.now()}.yaml`,
-        filters: [{ name: 'YAML', extensions: ['yml', 'yaml'] }]
-    });
-
-    if (filePath) {
-        await fs.writeFile(filePath, yaml.dump(exportObj));
-        return true;
-    }
-    return false;
-});
-
-// --- Import Logic (Unified) ---
-ipcMain.handle('import-data', async () => {
-    const { filePaths } = await dialog.showOpenDialog({
-        properties: ['openFile'],
-        filters: [{ name: 'YAML', extensions: ['yml', 'yaml'] }]
-    });
-
-    if (filePaths && filePaths.length > 0) {
-        try {
-            const content = await fs.readFile(filePaths[0], 'utf8');
-            const data = yaml.load(content);
-            
-            let updated = false;
-
-            // 1. 检测是否是组合包 (包含 profiles 或 preProxies 字段)
-            if (data.profiles || data.preProxies || data.subscriptions) {
-                // 导入 Profiles
-                if (Array.isArray(data.profiles)) {
-                    const currentProfiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
-                    data.profiles.forEach(p => {
-                        // 简单的去重逻辑：如果 ID 存在则覆盖，否则添加
-                        // 为了安全，重新生成 ID 更好，防止冲突？
-                        // 策略：保留导入的配置，但赋予新 ID (如果是克隆)，
-                        // 或者假设用户是做数据迁移，保留 ID。这里选择保留 ID 但检查存在。
-                        const idx = currentProfiles.findIndex(cp => cp.id === p.id);
-                        if (idx > -1) {
-                            currentProfiles[idx] = p; // 覆盖
-                        } else {
-                            // 如果是单个 Profile 格式导入进来的，可能没有 isSetup 等字段，补全它
-                            if(!p.id) p.id = uuidv4();
-                            currentProfiles.push(p);
-                        }
-                    });
-                    await fs.writeJson(PROFILES_FILE, currentProfiles);
-                    updated = true;
-                }
-
-                // 导入 Settings (Proxies)
-                if (Array.isArray(data.preProxies) || Array.isArray(data.subscriptions)) {
-                    const currentSettings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
-                    
-                    if(data.preProxies) {
-                        if(!currentSettings.preProxies) currentSettings.preProxies = [];
-                        // 合并节点，避免 ID 冲突
-                        data.preProxies.forEach(p => {
-                            if(!currentSettings.preProxies.find(cp => cp.id === p.id)) {
-                                currentSettings.preProxies.push(p);
-                            }
-                        });
-                    }
-                    
-                    if(data.subscriptions) {
-                        if(!currentSettings.subscriptions) currentSettings.subscriptions = [];
-                        data.subscriptions.forEach(s => {
-                            if(!currentSettings.subscriptions.find(cs => cs.id === s.id)) {
-                                currentSettings.subscriptions.push(s);
-                            }
-                        });
-                    }
-                    await fs.writeJson(SETTINGS_FILE, currentSettings);
-                    updated = true;
-                }
-
-            } 
-            // 2. 兼容旧版：单个 Profile 导入 (没有根键，直接就是对象)
-            else if (data.name && data.proxyStr && data.fingerprint) {
-                const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
-                // 总是作为新环境导入
-                const newProfile = { ...data, id: uuidv4(), isSetup: false, createdAt: Date.now() };
-                profiles.push(newProfile);
-                await fs.writeJson(PROFILES_FILE, profiles);
-                updated = true;
-            }
-
-            return updated;
-        } catch (e) {
-            console.error(e);
-            throw e;
-        }
-    }
-    return false;
-});
-
-app.on('window-all-closed', () => {
-    Object.values(activeProcesses).forEach(p => treeKill(p.xrayPid));
-    if (process.platform !== 'darwin') app.quit();
-});
