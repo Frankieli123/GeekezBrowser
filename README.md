@@ -88,9 +88,17 @@ To create an executable for your platform:
 ```bash
 # Windows
 npm run build:win
+```
 
+```bash
 # macOS
 npm run build:mac
+```
 
+```bash
 # Linux
 npm run build:linux
+```
+
+## ⚠️ Disclaimer
+This tool is provided for educational and research purposes only. The developers are not responsible for any account bans or legal issues resulting from the use of this software. Please comply with the terms of service of the platforms you use.
