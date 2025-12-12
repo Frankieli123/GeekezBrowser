@@ -20,11 +20,9 @@ function initCustomCityDropdown(inputId, dropdownId) {
     // 1. Add English "Auto" option
     allOptions.push({ name: "Auto (IP Based)", isAuto: true });
     // 2. Add cities
-    console.log('[CityDropdown] Window.CITY_DATA:', window.CITY_DATA);
     if (window.CITY_DATA) {
         allOptions = allOptions.concat(window.CITY_DATA);
     }
-    console.log('[CityDropdown] All Options:', allOptions.length);
 
     let selectedIndex = -1;
 
@@ -448,9 +446,6 @@ async function openEditModal(id) {
     sel.value = p.preProxyOverride || 'default';
     document.getElementById('editResW').value = fp.screen?.width || 1920;
     document.getElementById('editResH').value = fp.screen?.height || 1080;
-    document.getElementById('editUA').value = fp.userAgent || '';
-    document.getElementById('editGpuVendor').value = fp.webgl?.vendor || '';
-    document.getElementById('editGpuRenderer').value = fp.webgl?.renderer || '';
     document.getElementById('editSeed').value = fp.noiseSeed || 0;
     document.getElementById('editModal').style.display = 'flex';
 }
@@ -490,8 +485,6 @@ async function saveEditProfile() {
             delete p.fingerprint.city;
             delete p.fingerprint.geolocation;
         }
-        p.fingerprint.userAgent = document.getElementById('editUA').value;
-        p.fingerprint.webgl = { vendor: document.getElementById('editGpuVendor').value, renderer: document.getElementById('editGpuRenderer').value };
         p.fingerprint.noiseSeed = parseInt(document.getElementById('editSeed').value);
         console.log('[saveEditProfile] Calling updateProfile...');
         await window.electronAPI.updateProfile(p);
