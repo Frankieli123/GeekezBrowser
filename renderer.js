@@ -324,6 +324,13 @@ async function checkUpdatesSilent() {
         if (appRes.update) {
             const btn = document.getElementById('btnUpdate');
             if (btn) btn.classList.add('has-update');
+
+            // Auto popup for App update
+            showConfirm(`${t('appUpdateFound')} (v${appRes.remote}). ${t('btnSaveUpdate')}?`, () => {
+                if (appRes.url) {
+                    window.electronAPI.invoke('open-url', appRes.url);
+                }
+            });
             return;
         }
         const xrayRes = await window.electronAPI.invoke('check-xray-update');
