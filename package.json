@@ -51,6 +51,30 @@
       "target": "dmg",
       "icon": "icon.icns"
     },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 270,
+          "y": 100,
+          "type": "file",
+          "path": "resources/使用说明.txt"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      }
+    },
     "linux": {
       "target": "AppImage",
       "icon": "icon.png"
