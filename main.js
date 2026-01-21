@@ -134,6 +134,159 @@ function _sendJson(res, statusCode, payload) {
     res.end(JSON.stringify(payload));
 }
 
+function _sendHtml(res, statusCode, html) {
+    res.statusCode = statusCode;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.end(html);
+}
+
+function _renderDashboardHtml(profileId) {
+    const safeId = String(profileId || '').replace(/[^\w-]/g, '');
+    return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GeekEZ 仪表盘</title>
+  <style>
+    :root{--bg:#0b1020;--card:#121a33;--muted:#9aa4c3;--text:#e9eeff;--ok:#37d67a;--bad:#ff4d4f;--line:rgba(255,255,255,.08);}
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(1200px 700px at 20% 10%,#1a2b63,transparent 60%),radial-gradient(900px 600px at 90% 0,#2b1a63,transparent 55%),var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,'Microsoft YaHei',sans-serif}
+    .wrap{max-width:1100px;margin:24px auto;padding:0 16px}
+    .top{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+    h1{font-size:18px;margin:0;letter-spacing:.5px}
+    .sub{color:var(--muted);font-size:12px}
+    .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px;margin-top:12px}
+    .card{grid-column:span 12;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid var(--line);border-radius:14px;padding:14px}
+    @media (min-width:920px){.half{grid-column:span 6}.third{grid-column:span 4}}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .tag{display:inline-flex;gap:6px;align-items:center;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:rgba(0,0,0,.18);font-size:12px}
+    .dot{width:8px;height:8px;border-radius:50%}
+    .k{color:var(--muted);font-size:12px}
+    .v{font-size:13px}
+    pre{margin:8px 0 0;padding:12px;border-radius:12px;overflow:auto;background:rgba(0,0,0,.25);border:1px solid var(--line);font-size:12px;line-height:1.35}
+    a{color:#a6c8ff;text-decoration:none}
+    a:hover{text-decoration:underline}
+    .btn{cursor:pointer;border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--text);border-radius:10px;padding:8px 10px;font-size:12px}
+    .btn:hover{background:rgba(255,255,255,.10)}
+    .err{color:var(--bad);white-space:pre-wrap}
+  </style>
+  <script>window.__PROFILE_ID__=${JSON.stringify(safeId)};</script>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <h1>GeekEZ 指纹窗口仪表盘</h1>
+        <div class="sub">Profile: <span id="pid"></span> · API: <span id="api"></span></div>
+      </div>
+      <div class="row">
+        <button class="btn" id="btnReload">刷新</button>
+        <button class="btn" id="btnCopyWs">复制 WS</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card third">
+        <div class="row">
+          <span class="tag"><span class="dot" id="dotRun"></span><span id="runText">运行中</span></span>
+          <span class="tag">IP: <span id="ip">-</span></span>
+        </div>
+        <div style="margin-top:10px" class="row">
+          <div><div class="k">名称</div><div class="v" id="name">-</div></div>
+          <div><div class="k">备注</div><div class="v" id="remark">-</div></div>
+        </div>
+        <div style="margin-top:10px">
+          <div class="k">代理</div>
+          <div class="v" id="proxy">-</div>
+        </div>
+      </div>
+
+      <div class="card half">
+        <div class="k">运行信息</div>
+        <pre id="runtime">-</pre>
+      </div>
+
+      <div class="card half">
+        <div class="k">指纹配置（profiles.json）</div>
+        <pre id="fingerprint">-</pre>
+      </div>
+
+      <div class="card half">
+        <div class="k">浏览器真实值（当前页面）</div>
+        <pre id="browserInfo">-</pre>
+      </div>
+
+      <div class="card">
+        <div class="k">错误</div>
+        <div class="err" id="err"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const profileId = window.__PROFILE_ID__ || '';
+    const apiBase = location.origin;
+    document.getElementById('pid').textContent = profileId || '(none)';
+    document.getElementById('api').textContent = apiBase;
+
+    function setErr(msg){ document.getElementById('err').textContent = msg || ''; }
+
+    function pretty(o){ return JSON.stringify(o, null, 2); }
+
+    async function getJson(path){
+      const res = await fetch(apiBase + path, { cache: 'no-store' });
+      const json = await res.json().catch(() => ({}));
+      if (!json || json.success !== true) throw new Error((json && (json.error || json.msg)) || 'API error');
+      return json.data;
+    }
+
+    async function load(){
+      setErr('');
+      if (!profileId) { setErr('缺少 profile 参数'); return; }
+
+      const profile = await getJson('/profiles/' + encodeURIComponent(profileId));
+      document.getElementById('name').textContent = profile.name || '-';
+      document.getElementById('remark').textContent = profile.remark || '-';
+      document.getElementById('proxy').textContent = (profile.proxyStr || '-').replace(/:(?!\\/\\/)([^@]{0,64})@/g, ':***@');
+      document.getElementById('fingerprint').textContent = pretty(profile.fingerprint || {});
+
+      const runtime = await getJson('/profiles/' + encodeURIComponent(profileId) + '/runtime').catch(() => ({}));
+      document.getElementById('runtime').textContent = pretty(runtime || {});
+      const running = !!runtime.running;
+      document.getElementById('dotRun').style.background = running ? 'var(--ok)' : 'var(--bad)';
+      document.getElementById('runText').textContent = running ? '运行中' : '未运行';
+
+      const ip = await getJson('/profiles/' + encodeURIComponent(profileId) + '/ip').catch(() => null);
+      document.getElementById('ip').textContent = (ip && ip.ip) ? ip.ip : '-';
+
+      const browserInfo = {
+        userAgent: navigator.userAgent,
+        platform: navigator.platform,
+        languages: navigator.languages,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        screen: { width: screen.width, height: screen.height, availWidth: screen.availWidth, availHeight: screen.availHeight, colorDepth: screen.colorDepth, pixelDepth: screen.pixelDepth },
+        window: { innerWidth: innerWidth, innerHeight: innerHeight, outerWidth: outerWidth, outerHeight: outerHeight, devicePixelRatio: devicePixelRatio },
+        hardwareConcurrency: navigator.hardwareConcurrency,
+        deviceMemory: navigator.deviceMemory
+      };
+      document.getElementById('browserInfo').textContent = pretty(browserInfo);
+
+      const btnCopy = document.getElementById('btnCopyWs');
+      btnCopy.onclick = async () => {
+        const ws = (runtime && runtime.ws) ? runtime.ws : '';
+        if (!ws) { setErr('WS 为空（可能未开启远程调试或未运行）'); return; }
+        try { await navigator.clipboard.writeText(ws); } catch (e) { setErr('复制失败：' + e); }
+      };
+    }
+
+    document.getElementById('btnReload').onclick = load;
+    load().catch(e => setErr(String(e && e.stack ? e.stack : e)));
+  </script>
+</body>
+</html>`;
+}
+
 function _readJsonBody(req, maxBytes = 1024 * 1024) {
     return new Promise((resolve, reject) => {
         let body = '';
@@ -166,6 +319,11 @@ function startLocalApiServer() {
 
             if (req.method === 'GET' && path === '/health') {
                 return _sendJson(res, 200, { success: true, data: { name: app.getName(), version: app.getVersion() } });
+            }
+
+            if (req.method === 'GET' && path === '/dashboard') {
+                const profileId = urlObj.searchParams.get('profile') || '';
+                return _sendHtml(res, 200, _renderDashboardHtml(profileId));
             }
 
             if (path === '/profiles') {
@@ -204,6 +362,64 @@ function startLocalApiServer() {
                 }
 
                 return _sendJson(res, 405, { success: false, error: 'Method Not Allowed' });
+            }
+
+            const subMatch = path.match(/^\/profiles\/([^/]+)\/(runtime|ip)$/);
+            if (subMatch) {
+                const profileId = subMatch[1];
+                const kind = subMatch[2];
+                if (req.method !== 'GET') return _sendJson(res, 405, { success: false, error: 'Method Not Allowed' });
+
+                const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+                const profile = profiles.find(p => p.id === profileId);
+                if (!profile) return _sendJson(res, 404, { success: false, error: 'Profile not found' });
+
+                const proc = activeProcesses[profileId];
+                const running = !!(proc && proc.browser && proc.browser.isConnected && proc.browser.isConnected());
+
+                if (kind === 'runtime') {
+                    const ws = running && proc && proc.browser && proc.browser.wsEndpoint ? proc.browser.wsEndpoint() : null;
+                    const httpEndpoint = running && proc && proc.remoteDebuggingEnabled && profile.debugPort ? `http://${LOCAL_API_HOST}:${profile.debugPort}` : null;
+                    return _sendJson(res, 200, {
+                        success: true,
+                        data: {
+                            running,
+                            ws,
+                            http: httpEndpoint,
+                            debugPort: running && proc && proc.remoteDebuggingEnabled ? (profile.debugPort || undefined) : undefined,
+                            localPort: running && proc ? (proc.localPort || undefined) : undefined,
+                        }
+                    });
+                }
+
+                if (!running || !proc || !proc.localPort) return _sendJson(res, 400, { success: false, error: 'Profile not running' });
+
+                const agent = new SocksProxyAgent(`socks5://127.0.0.1:${proc.localPort}`);
+                const urls = [
+                    'https://api.ipify.org?format=text',
+                    'https://ifconfig.me/ip',
+                    'https://ipinfo.io/ip',
+                ];
+
+                for (const u of urls) {
+                    try {
+                        const text = await new Promise((resolve, reject) => {
+                            const mod = u.startsWith('https:') ? https : http;
+                            const r = mod.get(u, { agent, timeout: 8000, headers: { 'User-Agent': 'GeekEZ-Dashboard' } }, (resp) => {
+                                let buf = '';
+                                resp.setEncoding('utf8');
+                                resp.on('data', (c) => buf += c);
+                                resp.on('end', () => resolve(buf));
+                            });
+                            r.on('timeout', () => { r.destroy(new Error('timeout')); });
+                            r.on('error', reject);
+                        });
+                        const ip = String(text || '').trim();
+                        if (ip && ip.length <= 64) return _sendJson(res, 200, { success: true, data: { ip, source: u } });
+                    } catch (e) { }
+                }
+
+                return _sendJson(res, 502, { success: false, error: 'IP fetch failed' });
             }
 
             const match = path.match(/^\/profiles\/([^/]+)(?:\/(open|close))?$/);
@@ -613,7 +829,8 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
         userExtensions: [],
         preProxies: [],
         mode: 'single',
-        enablePreProxy: false
+        enablePreProxy: false,
+        dashboardOnLaunch: true
     }));
 
     const profiles = await fs.readJson(PROFILES_FILE);
@@ -695,6 +912,7 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
 
         const launchArgs = [
             `--proxy-server=socks5://127.0.0.1:${localPort}`,
+            '--proxy-bypass-list=127.0.0.1;localhost;[::1]',
             `--user-data-dir=${userDataDir}`,
             `--window-size=${profile.fingerprint?.window?.width || 1280},${profile.fingerprint?.window?.height || 800}`,
             '--restore-last-session',
@@ -764,9 +982,20 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
         activeProcesses[profileId] = {
             xrayPid: xrayProcess.pid,
             browser,
-            logFd: logFd  // 存储日志文件描述符，用于后续关闭
+            logFd: logFd,  // 存储日志文件描述符，用于后续关闭
+            localPort,
+            remoteDebuggingEnabled
         };
         if (sender && !sender.isDestroyed()) sender.send('profile-status', { id: profileId, status: 'running' });
+
+        if (settings.dashboardOnLaunch !== false) {
+            try {
+                const dashUrl = `http://${LOCAL_API_HOST}:${LOCAL_API_PORT}/dashboard?profile=${encodeURIComponent(profileId)}`;
+                const page = await browser.newPage();
+                await page.goto(dashUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
+                await page.bringToFront();
+            } catch (e) { }
+        }
 
         // CDP Geolocation Removed in favor of Stealth JS Hook
         // 由于 CDP 本身会被检测，我们移除所有 Emulation.Overrides
