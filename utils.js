@@ -244,23 +244,25 @@ function parseProxyLink(link, tag) {
                 const authPart = cleanLink.substring(0, atIndex);
                 serverPart = cleanLink.substring(atIndex + 1);
 
-                // Try to decode as base64 first (v2rayN style)
-                try {
-                    const decoded = Buffer.from(authPart, 'base64').toString('utf8');
-                    const colonIndex = decoded.indexOf(':');
-                    if (colonIndex !== -1) {
-                        username = decoded.substring(0, colonIndex);
-                        password = decoded.substring(colonIndex + 1);
-                    } else {
-                        // Not a valid user:pass format after decode, treat as plain username
-                        username = authPart;
-                    }
-                } catch (e) {
-                    // Not base64, check if it's user:pass format
-                    const colonIndex = authPart.indexOf(':');
-                    if (colonIndex !== -1) {
-                        username = authPart.substring(0, colonIndex);
-                        password = authPart.substring(colonIndex + 1);
+                const colonIndex = authPart.indexOf(':');
+                if (colonIndex !== -1) {
+                    username = authPart.substring(0, colonIndex);
+                    password = authPart.substring(colonIndex + 1);
+                } else {
+                    const isBase64Like = /^[A-Za-z0-9+/=_-]+$/.test(authPart);
+                    if (isBase64Like) {
+                        try {
+                            const decoded = Buffer.from(authPart, 'base64').toString('utf8');
+                            const decodedColon = decoded.indexOf(':');
+                            if (decodedColon !== -1) {
+                                username = decoded.substring(0, decodedColon);
+                                password = decoded.substring(decodedColon + 1);
+                            } else {
+                                username = authPart;
+                            }
+                        } catch (e) {
+                            username = authPart;
+                        }
                     } else {
                         username = authPart;
                     }
