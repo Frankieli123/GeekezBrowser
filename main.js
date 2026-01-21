@@ -394,7 +394,7 @@ function startLocalApiServer() {
 
                 if (!running || !proc || !proc.localPort) return _sendJson(res, 400, { success: false, error: 'Profile not running' });
 
-                const agent = new SocksProxyAgent(`socks5://127.0.0.1:${proc.localPort}`);
+                const agent = new SocksProxyAgent(`socks5h://127.0.0.1:${proc.localPort}`);
                 const urls = [
                     'https://api.ipify.org?format=text',
                     'https://ifconfig.me/ip',
@@ -501,7 +501,7 @@ ipcMain.handle('test-proxy-latency', async (e, proxyStr) => {
         await fs.writeJson(tempConfigPath, config);
         const xrayProcess = spawn(BIN_PATH, ['run', '-c', tempConfigPath], { cwd: BIN_DIR, env: { ...process.env, 'XRAY_LOCATION_ASSET': RESOURCES_BIN }, stdio: 'ignore', windowsHide: true });
         await new Promise(r => setTimeout(r, 800));
-        const start = Date.now(); const agent = new SocksProxyAgent(`socks5://127.0.0.1:${tempPort}`);
+        const start = Date.now(); const agent = new SocksProxyAgent(`socks5h://127.0.0.1:${tempPort}`);
         const result = await new Promise((resolve) => {
             const req = http.get('http://cp.cloudflare.com/generate_204', { agent, timeout: 5000 }, (res) => {
                 const latency = Date.now() - start; if (res.statusCode === 204) resolve({ success: true, latency }); else resolve({ success: false, msg: `HTTP ${res.statusCode}` });
@@ -630,24 +630,24 @@ ipcMain.handle('save-profile', async (event, data) => {
     return newProfile;
 });
 async function closeProfileInternal(id, sender) {
-    if (!activeProcesses[id]) return false;
+    const proc = activeProcesses[id];
+    if (!proc) return false;
+    delete activeProcesses[id];
 
-    await forceKill(activeProcesses[id].xrayPid);
+    await forceKill(proc.xrayPid);
     try {
-        await activeProcesses[id].browser.close();
+        await proc.browser.close();
     } catch (e) { }
 
     // 关闭日志文件描述符（Windows 必须）
-    if (activeProcesses[id].logFd !== undefined) {
+    if (proc.logFd !== undefined) {
         try {
-            fs.closeSync(activeProcesses[id].logFd);
+            fs.closeSync(proc.logFd);
             console.log('Closed log file descriptor');
         } catch (e) {
             console.error('Failed to close log fd:', e.message);
         }
     }
-
-    delete activeProcesses[id];
     // Windows 需要更长的等待时间让文件释放
     await new Promise(r => setTimeout(r, 1000));
 
@@ -661,26 +661,7 @@ ipcMain.handle('close-profile', async (event, id) => {
 
 async function deleteProfileInternal(id) {
     // 关闭正在运行的进程
-    if (activeProcesses[id]) {
-        await forceKill(activeProcesses[id].xrayPid);
-        try {
-            await activeProcesses[id].browser.close();
-        } catch (e) { }
-
-        // 关闭日志文件描述符（Windows 必须）
-        if (activeProcesses[id].logFd !== undefined) {
-            try {
-                fs.closeSync(activeProcesses[id].logFd);
-                console.log('Closed log file descriptor');
-            } catch (e) {
-                console.error('Failed to close log fd:', e.message);
-            }
-        }
-
-        delete activeProcesses[id];
-        // Windows 需要更长的等待时间让文件释放
-        await new Promise(r => setTimeout(r, 1000));
-    }
+    await closeProfileInternal(id, null);
 
     // 从 profiles.json 中删除
     let profiles = await fs.readJson(PROFILES_FILE);
