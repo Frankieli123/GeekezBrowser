@@ -36,6 +36,10 @@ fs.ensureDirSync(DATA_PATH);
 fs.ensureDirSync(TRASH_PATH);
 
 let activeProcesses = {};
+let localApiServer = null;
+
+const LOCAL_API_HOST = '127.0.0.1';
+const LOCAL_API_PORT = Number.parseInt(process.env.GEEKEZ_API_PORT || '17555', 10) || 17555;
 
 function forceKill(pid) {
     return new Promise((resolve) => {
@@ -124,8 +128,149 @@ async function generateExtension(profilePath, fingerprint, profileName, watermar
     return extDir;
 }
 
+function _sendJson(res, statusCode, payload) {
+    res.statusCode = statusCode;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.end(JSON.stringify(payload));
+}
+
+function _readJsonBody(req, maxBytes = 1024 * 1024) {
+    return new Promise((resolve, reject) => {
+        let body = '';
+        req.on('data', (chunk) => {
+            body += chunk;
+            if (body.length > maxBytes) {
+                reject(new Error('Payload too large'));
+                req.destroy();
+            }
+        });
+        req.on('end', () => {
+            if (!body.trim()) return resolve({});
+            try {
+                resolve(JSON.parse(body));
+            } catch (e) {
+                reject(new Error('Invalid JSON'));
+            }
+        });
+        req.on('error', reject);
+    });
+}
+
+function startLocalApiServer() {
+    if (localApiServer) return;
+
+    localApiServer = http.createServer(async (req, res) => {
+        try {
+            const urlObj = new URL(req.url, `http://${req.headers.host || LOCAL_API_HOST}`);
+            const path = urlObj.pathname;
+
+            if (req.method === 'GET' && path === '/health') {
+                return _sendJson(res, 200, { success: true, data: { name: app.getName(), version: app.getVersion() } });
+            }
+
+            if (path === '/profiles') {
+                if (req.method === 'GET') {
+                    const list = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+                    return _sendJson(res, 200, { success: true, data: { list } });
+                }
+
+                if (req.method === 'POST') {
+                    const data = await _readJsonBody(req);
+
+                    const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+                    const fingerprint = data.fingerprint || generateFingerprint();
+                    if (data.timezone) fingerprint.timezone = data.timezone;
+                    else if (!fingerprint.timezone) fingerprint.timezone = "America/Los_Angeles";
+                    if (data.city) fingerprint.city = data.city;
+                    if (data.geolocation) fingerprint.geolocation = data.geolocation;
+                    if (data.language && data.language !== 'auto') fingerprint.language = data.language;
+
+                    const newProfile = {
+                        id: uuidv4(),
+                        name: data.name || 'Profile',
+                        proxyStr: data.proxyStr || '',
+                        remark: data.remark || '',
+                        tags: data.tags || [],
+                        fingerprint: fingerprint,
+                        preProxyOverride: data.preProxyOverride || 'default',
+                        debugPort: data.debugPort || undefined,
+                        isSetup: false,
+                        createdAt: Date.now()
+                    };
+
+                    profiles.push(newProfile);
+                    await fs.writeJson(PROFILES_FILE, profiles);
+                    return _sendJson(res, 201, { success: true, data: newProfile });
+                }
+
+                return _sendJson(res, 405, { success: false, error: 'Method Not Allowed' });
+            }
+
+            const match = path.match(/^\/profiles\/([^/]+)(?:\/(open|close))?$/);
+            if (match) {
+                const profileId = match[1];
+                const action = match[2];
+                const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+                const profile = profiles.find(p => p.id === profileId);
+
+                if (!profile) return _sendJson(res, 404, { success: false, error: 'Profile not found' });
+
+                if (!action) {
+                    if (req.method === 'GET') {
+                        return _sendJson(res, 200, { success: true, data: profile });
+                    }
+
+                    if (req.method === 'PATCH') {
+                        const patch = await _readJsonBody(req);
+                        const allowed = ['name', 'proxyStr', 'remark', 'tags', 'fingerprint', 'debugPort', 'preProxyOverride'];
+                        for (const k of allowed) {
+                            if (Object.prototype.hasOwnProperty.call(patch, k)) profile[k] = patch[k];
+                        }
+                        await fs.writeJson(PROFILES_FILE, profiles);
+                        return _sendJson(res, 200, { success: true, data: profile });
+                    }
+
+                    if (req.method === 'DELETE') {
+                        await deleteProfileInternal(profileId);
+                        return _sendJson(res, 200, { success: true });
+                    }
+
+                    return _sendJson(res, 405, { success: false, error: 'Method Not Allowed' });
+                }
+
+                if (req.method !== 'POST') return _sendJson(res, 405, { success: false, error: 'Method Not Allowed' });
+
+                if (action === 'open') {
+                    const body = await _readJsonBody(req).catch(() => ({}));
+                    const style = body.watermarkStyle || 'enhanced';
+                    const result = await launchProfileInternal(profileId, style, null, { forceRemoteDebugging: true });
+                    return _sendJson(res, 200, { success: true, data: result });
+                }
+
+                if (action === 'close') {
+                    await closeProfileInternal(profileId, null);
+                    return _sendJson(res, 200, { success: true });
+                }
+            }
+
+            return _sendJson(res, 404, { success: false, error: 'Not Found' });
+        } catch (e) {
+            return _sendJson(res, 500, { success: false, error: e.message || String(e) });
+        }
+    });
+
+    localApiServer.on('error', (err) => {
+        console.error(`[GeekEZ Local API] Error: ${err && err.message ? err.message : String(err)}`);
+    });
+
+    localApiServer.listen(LOCAL_API_PORT, LOCAL_API_HOST, () => {
+        console.log(`[GeekEZ Local API] Listening on http://${LOCAL_API_HOST}:${LOCAL_API_PORT}`);
+    });
+}
+
 app.whenReady().then(async () => {
     createWindow();
+    startLocalApiServer();
     setTimeout(() => { fs.emptyDir(TRASH_PATH).catch(() => { }); }, 10000);
 });
 
@@ -257,6 +402,7 @@ ipcMain.handle('save-profile', async (event, data) => {
         id: uuidv4(),
         name: data.name,
         proxyStr: data.proxyStr,
+        remark: data.remark || '',
         tags: data.tags || [],
         fingerprint: fingerprint,
         preProxyOverride: 'default',
@@ -267,7 +413,37 @@ ipcMain.handle('save-profile', async (event, data) => {
     await fs.writeJson(PROFILES_FILE, profiles);
     return newProfile;
 });
-ipcMain.handle('delete-profile', async (event, id) => {
+async function closeProfileInternal(id, sender) {
+    if (!activeProcesses[id]) return false;
+
+    await forceKill(activeProcesses[id].xrayPid);
+    try {
+        await activeProcesses[id].browser.close();
+    } catch (e) { }
+
+    // 关闭日志文件描述符（Windows 必须）
+    if (activeProcesses[id].logFd !== undefined) {
+        try {
+            fs.closeSync(activeProcesses[id].logFd);
+            console.log('Closed log file descriptor');
+        } catch (e) {
+            console.error('Failed to close log fd:', e.message);
+        }
+    }
+
+    delete activeProcesses[id];
+    // Windows 需要更长的等待时间让文件释放
+    await new Promise(r => setTimeout(r, 1000));
+
+    if (sender && !sender.isDestroyed()) sender.send('profile-status', { id, status: 'stopped' });
+    return true;
+}
+ipcMain.handle('close-profile', async (event, id) => {
+    await closeProfileInternal(id, event.sender);
+    return true;
+});
+
+async function deleteProfileInternal(id) {
     // 关闭正在运行的进程
     if (activeProcesses[id]) {
         await forceKill(activeProcesses[id].xrayPid);
@@ -334,7 +510,8 @@ ipcMain.handle('delete-profile', async (event, id) => {
     }
 
     return true;
-});
+}
+ipcMain.handle('delete-profile', async (event, id) => deleteProfileInternal(id));
 ipcMain.handle('get-settings', async () => { if (fs.existsSync(SETTINGS_FILE)) return fs.readJson(SETTINGS_FILE); return { preProxies: [], mode: 'single', enablePreProxy: false, enableRemoteDebugging: false }; });
 ipcMain.handle('save-settings', async (e, settings) => { await fs.writeJson(SETTINGS_FILE, settings); return true; });
 ipcMain.handle('select-extension-folder', async () => {
@@ -372,8 +549,8 @@ ipcMain.handle('export-data', async (e, type) => { const profiles = fs.existsSyn
 ipcMain.handle('import-data', async () => { const { filePaths } = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: 'YAML', extensions: ['yml', 'yaml'] }] }); if (filePaths && filePaths.length > 0) { try { const content = await fs.readFile(filePaths[0], 'utf8'); const data = yaml.load(content); let updated = false; if (data.profiles || data.preProxies || data.subscriptions) { if (Array.isArray(data.profiles)) { const currentProfiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : []; data.profiles.forEach(p => { const idx = currentProfiles.findIndex(cp => cp.id === p.id); if (idx > -1) currentProfiles[idx] = p; else { if (!p.id) p.id = uuidv4(); currentProfiles.push(p); } }); await fs.writeJson(PROFILES_FILE, currentProfiles); updated = true; } if (Array.isArray(data.preProxies) || Array.isArray(data.subscriptions)) { const currentSettings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] }; if (data.preProxies) { if (!currentSettings.preProxies) currentSettings.preProxies = []; data.preProxies.forEach(p => { if (!currentSettings.preProxies.find(cp => cp.id === p.id)) currentSettings.preProxies.push(p); }); } if (data.subscriptions) { if (!currentSettings.subscriptions) currentSettings.subscriptions = []; data.subscriptions.forEach(s => { if (!currentSettings.subscriptions.find(cs => cs.id === s.id)) currentSettings.subscriptions.push(s); }); } await fs.writeJson(SETTINGS_FILE, currentSettings); updated = true; } } else if (data.name && data.proxyStr && data.fingerprint) { const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : []; const newProfile = { ...data, id: uuidv4(), isSetup: false, createdAt: Date.now() }; profiles.push(newProfile); await fs.writeJson(PROFILES_FILE, profiles); updated = true; } return updated; } catch (e) { console.error(e); throw e; } } return false; });
 
 // --- 核心启动逻辑 ---
-ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
-    const sender = event.sender;
+async function launchProfileInternal(profileId, watermarkStyle, sender, options = {}) {
+    const forceRemoteDebugging = !!options.forceRemoteDebugging;
 
     if (activeProcesses[profileId]) {
         const proc = activeProcesses[profileId];
@@ -393,7 +570,17 @@ ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
                         await page.bringToFront();
                     }
                 }
-                return "环境已唤醒";
+                const ws = proc.browser && proc.browser.wsEndpoint ? proc.browser.wsEndpoint() : null;
+                let name = '';
+                let remark = '';
+                let debugPort = null;
+                try {
+                    const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+                    const p = profiles.find(pp => pp.id === profileId);
+                    if (p) { name = p.name || ''; remark = p.remark || ''; debugPort = p.debugPort || null; }
+                } catch (e) { }
+                const httpEndpoint = debugPort ? `http://${LOCAL_API_HOST}:${debugPort}` : null;
+                return { id: profileId, name, remark, ws, http: httpEndpoint, debugPort: debugPort || undefined, message: "环境已唤醒" };
             } catch (e) {
                 await forceKill(proc.xrayPid);
                 delete activeProcesses[profileId];
@@ -402,7 +589,20 @@ ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
             await forceKill(proc.xrayPid);
             delete activeProcesses[profileId];
         }
-        if (activeProcesses[profileId]) return "环境已唤醒";
+        if (activeProcesses[profileId]) {
+            const proc = activeProcesses[profileId];
+            const ws = proc.browser && proc.browser.wsEndpoint ? proc.browser.wsEndpoint() : null;
+            let name = '';
+            let remark = '';
+            let debugPort = null;
+            try {
+                const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+                const p = profiles.find(pp => pp.id === profileId);
+                if (p) { name = p.name || ''; remark = p.remark || ''; debugPort = p.debugPort || null; }
+            } catch (e) { }
+            const httpEndpoint = debugPort ? `http://${LOCAL_API_HOST}:${debugPort}` : null;
+            return { id: profileId, name, remark, ws, http: httpEndpoint, debugPort: debugPort || undefined, message: "环境已唤醒" };
+        }
     }
 
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -519,7 +719,13 @@ ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
         ];
 
         // 5. Remote Debugging Port (if enabled)
-        if (settings.enableRemoteDebugging && profile.debugPort) {
+        const remoteDebuggingEnabled = forceRemoteDebugging || settings.enableRemoteDebugging;
+        if (remoteDebuggingEnabled) {
+            if (!profile.debugPort) {
+                profile.debugPort = await getPort();
+                if (profile.debugPort === localPort) profile.debugPort = await getPort();
+                try { await fs.writeJson(PROFILES_FILE, profiles); } catch (e) { }
+            }
             launchArgs.push(`--remote-debugging-port=${profile.debugPort}`);
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log('⚠️  REMOTE DEBUGGING ENABLED');
@@ -560,7 +766,7 @@ ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
             browser,
             logFd: logFd  // 存储日志文件描述符，用于后续关闭
         };
-        sender.send('profile-status', { id: profileId, status: 'running' });
+        if (sender && !sender.isDestroyed()) sender.send('profile-status', { id: profileId, status: 'running' });
 
         // CDP Geolocation Removed in favor of Stealth JS Hook
         // 由于 CDP 本身会被检测，我们移除所有 Emulation.Overrides
@@ -591,15 +797,30 @@ ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
                     // 忽略清理错误
                 }
 
-                if (!sender.isDestroyed()) sender.send('profile-status', { id: profileId, status: 'stopped' });
+                if (sender && !sender.isDestroyed()) sender.send('profile-status', { id: profileId, status: 'stopped' });
             }
         });
 
-        return switchMsg;
+        const ws = browser && browser.wsEndpoint ? browser.wsEndpoint() : null;
+        const httpEndpoint = remoteDebuggingEnabled && profile.debugPort ? `http://${LOCAL_API_HOST}:${profile.debugPort}` : null;
+        return {
+            id: profileId,
+            name: profile.name || '',
+            remark: profile.remark || '',
+            ws,
+            http: httpEndpoint,
+            debugPort: remoteDebuggingEnabled ? (profile.debugPort || undefined) : undefined,
+            message: switchMsg
+        };
     } catch (err) {
         console.error(err);
         throw err;
     }
+}
+
+ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
+    const result = await launchProfileInternal(profileId, watermarkStyle, event.sender, { forceRemoteDebugging: false });
+    return result.message;
 });
 
 app.on('window-all-closed', () => {
