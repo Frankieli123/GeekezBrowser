@@ -335,7 +335,14 @@ function generateXrayConfig(mainProxyStr, localPort, preProxyConfig = null) {
 
     return {
         log: { loglevel: "warning" },
-        inbounds: [{ port: localPort, listen: "127.0.0.1", protocol: "socks", settings: { udp: true } }],
+        dns: { queryStrategy: "UseIPv4" },
+        inbounds: [{
+            port: localPort,
+            listen: "127.0.0.1",
+            protocol: "socks",
+            settings: { udp: true },
+            sniffing: { enabled: true, destOverride: ["http", "tls"] }
+        }],
         outbounds: outbounds,
         routing: {
             domainStrategy: "IPIfNonMatch",
