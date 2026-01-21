@@ -341,11 +341,11 @@ function generateXrayConfig(mainProxyStr, localPort, preProxyConfig = null) {
             listen: "127.0.0.1",
             protocol: "socks",
             settings: { udp: true },
-            sniffing: { enabled: true, destOverride: ["http", "tls"] }
+            sniffing: { enabled: true, destOverride: ["http", "tls", "quic"] }
         }],
         outbounds: outbounds,
         routing: {
-            domainStrategy: "IPIfNonMatch",
+            domainStrategy: "AsIs",
             rules: [{ type: "field", outboundTag: "proxy_main", port: "0-65535" }]
         }
     };
