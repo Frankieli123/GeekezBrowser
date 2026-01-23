@@ -7,6 +7,7 @@ let currentProxyGroup = 'manual';
 let inputCallback = null;
 let searchText = '';
 let viewMode = localStorage.getItem('geekez_view') || 'list';
+let sshHostKeyPromptReq = null;
 
 // Custom City Dropdown Initialization (Matches Timezone Logic)
 function initCustomCityDropdown(inputId, dropdownId) {
@@ -303,6 +304,94 @@ function closeConfirm(result) {
     confirmCallback = null;
 }
 
+function openSshHostKeyModal(data) {
+    if (!data || !data.requestId) return;
+    sshHostKeyPromptReq = data;
+
+    const isCn = window.curLang === 'cn';
+    const isUpdate = !!data.isUpdate;
+    const host = data.host ? String(data.host) : '';
+    const port = (data.port !== undefined && data.port !== null) ? String(data.port) : '';
+    const fingerprint = data.fingerprint ? String(data.fingerprint) : '-';
+
+    document.getElementById('sshHostKeyTitle').innerText = isUpdate
+        ? (isCn ? 'SSH 主机指纹已变更' : 'SSH Host Key Changed')
+        : (isCn ? 'SSH 主机指纹确认' : 'SSH Host Key Confirmation');
+
+    document.getElementById('sshHostKeyMessage').innerText = isUpdate
+        ? (isCn
+            ? '检测到该服务器的 SSH Host Key 与本机缓存不一致。只有在你确认服务器确实更换过 Host Key 时才继续。'
+            : 'The SSH host key does not match your cached key. Continue only if you trust this change.')
+        : (isCn
+            ? '首次连接该 SSH 服务器需要确认 Host Key（避免连接到伪造服务器）。请核对指纹后再继续。'
+            : 'First-time connection requires confirming the host key. Verify the fingerprint before continuing.');
+
+    document.getElementById('sshHostKeyHost').innerText = host || '-';
+    document.getElementById('sshHostKeyPort').innerText = port || '-';
+    document.getElementById('sshHostKeyFingerprint').innerText = fingerprint;
+
+    const btnYes = document.getElementById('sshHostKeyBtnYes');
+    const btnOnce = document.getElementById('sshHostKeyBtnOnce');
+    const btnCancel = document.getElementById('sshHostKeyBtnCancel');
+    const btnCopy = document.getElementById('sshHostKeyBtnCopy');
+
+    if (btnYes) btnYes.innerText = isUpdate
+        ? (isCn ? '更新缓存并继续 (y)' : 'Update & Continue (y)')
+        : (isCn ? '信任并继续 (y)' : 'Trust & Continue (y)');
+    if (btnOnce) btnOnce.innerText = isCn ? '仅本次继续 (n)' : 'Continue Once (n)';
+    if (btnCancel) btnCancel.innerText = isCn ? '取消' : 'Cancel';
+    if (btnCopy) btnCopy.innerText = isCn ? '复制指纹' : 'Copy Fingerprint';
+
+    const rawWrap = document.getElementById('sshHostKeyRawWrap');
+    const rawEl = document.getElementById('sshHostKeyRaw');
+    const raw = data.raw ? String(data.raw).trim() : '';
+    if (rawWrap && rawEl) {
+        if (raw) {
+            rawEl.textContent = raw;
+            rawWrap.style.display = 'block';
+        } else {
+            rawEl.textContent = '';
+            rawWrap.style.display = 'none';
+        }
+    }
+
+    document.getElementById('sshHostKeyModal').style.display = 'flex';
+}
+
+async function closeSshHostKeyModal(choice) {
+    const modal = document.getElementById('sshHostKeyModal');
+    if (modal) modal.style.display = 'none';
+
+    const req = sshHostKeyPromptReq;
+    sshHostKeyPromptReq = null;
+    if (!req || !req.requestId) return;
+
+    const c = (choice === 'y' || choice === 'n') ? choice : 'cancel';
+    try { await window.electronAPI.invoke('ssh-hostkey-prompt-result', { requestId: req.requestId, choice: c }); } catch (e) { }
+}
+
+async function copySshHostKeyFingerprint() {
+    const el = document.getElementById('sshHostKeyFingerprint');
+    const btn = document.getElementById('sshHostKeyBtnCopy');
+    const text = el ? String(el.innerText || '').trim() : '';
+    if (!text || text === '-') return;
+
+    const isCn = window.curLang === 'cn';
+    const original = btn ? btn.innerText : '';
+    try {
+        await navigator.clipboard.writeText(text);
+        if (btn) {
+            btn.innerText = isCn ? '已复制' : 'Copied';
+            setTimeout(() => { if (btn) btn.innerText = original; }, 900);
+        }
+    } catch (e) {
+        if (btn) {
+            btn.innerText = isCn ? '复制失败' : 'Copy failed';
+            setTimeout(() => { if (btn) btn.innerText = original; }, 1200);
+        }
+    }
+}
+
 function showInput(title, callback) {
     document.getElementById('inputModalTitle').innerText = title;
     document.getElementById('inputModalValue').value = '';
@@ -332,6 +421,15 @@ async function init() {
     window.electronAPI.onProfileStatus(({ id, status }) => {
         const badge = document.getElementById(`status-${id}`);
         if (badge) status === 'running' ? badge.classList.add('active') : badge.classList.remove('active');
+    });
+    if (window.electronAPI.onSshHostKeyPrompt) {
+        window.electronAPI.onSshHostKeyPrompt((data) => openSshHostKeyModal(data));
+    }
+    document.addEventListener('keydown', (e) => {
+        const modal = document.getElementById('sshHostKeyModal');
+        if (!modal || modal.style.display !== 'flex') return;
+        if (e.key === 'Escape') closeSshHostKeyModal('cancel');
+        else if (e.key === 'Enter') closeSshHostKeyModal('y');
     });
 
     // 核心修复：版本号注入

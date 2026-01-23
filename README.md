@@ -47,6 +47,7 @@ It is designed to help e-commerce operators (Amazon, TikTok, Facebook, Shopee, e
 
 ### 🔗 Powerful Network Engine (Xray-core)
 *   **Full Protocol Support**: VMess, VLESS, Trojan, Shadowsocks (including **2022**), Socks5, HTTP.
+*   **SSH Proxy (Dynamic Forwarding)**: `ssh://user@host:22?key=...` (key/ssh-agent) or `ssh://user:pass@host:22` (Windows + PuTTY/plink). The app spawns a local SOCKS5 and routes traffic through it. If you want fully non-interactive plink, set `?hostkey=...` (plink `-hostkey`).
 *   **Advanced Transports**: Support for **REALITY**, **XHTTP**, **gRPC**, **mKCP**, WebSocket, H2.
 *   **Proxy Chain (Pre-Proxy)**: `[Local] -> [Pre-Proxy] -> [Target Node] -> [Web]`. Hides your real IP from the proxy provider.
 *   **Smart Routing**: Automatic IPv4/IPv6 dual-stack handling.

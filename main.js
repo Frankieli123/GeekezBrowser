@@ -1,7 +1,7 @@
 ﻿const { app, BrowserWindow, ipcMain, dialog, screen, shell } = require('electron');
 const path = require('path');
 const fs = require('fs-extra');
-const { spawn, exec } = require('child_process');
+const { spawn, spawnSync, exec } = require('child_process');
 const getPort = require('get-port');
 const puppeteer = require('puppeteer'); // 使用原生 puppeteer，不带 extra
 const { v4: uuidv4 } = require('uuid');
@@ -10,6 +10,7 @@ const { SocksProxyAgent } = require('socks-proxy-agent');
 const http = require('http');
 const https = require('https');
 const os = require('os');
+const net = require('net');
 
 
 // Hardware acceleration enabled for better UI performance
@@ -37,6 +38,9 @@ fs.ensureDirSync(TRASH_PATH);
 
 let activeProcesses = {};
 let localApiServer = null;
+const trustedSshHosts = new Set();
+const sshHostKeyPromptWaiters = new Map();
+let sshHostKeyPromptSeq = 0;
 
 const LOCAL_API_HOST = '127.0.0.1';
 const LOCAL_API_PORT = Number.parseInt(process.env.GEEKEZ_API_PORT || '17555', 10) || 17555;
@@ -49,6 +53,352 @@ function forceKill(pid) {
             else { process.kill(pid, 'SIGKILL'); resolve(); }
         } catch (e) { resolve(); }
     });
+}
+
+function _sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
+}
+
+async function waitForTcpPort(host, port, timeoutMs = 6000, shouldAbort = null) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        try { if (typeof shouldAbort === 'function' && shouldAbort()) return false; } catch (e) { }
+        const ok = await new Promise((resolve) => {
+            const sock = net.connect({ host, port }, () => { try { sock.destroy(); } catch (e) { } resolve(true); });
+            sock.on('error', () => resolve(false));
+        });
+        if (ok) return true;
+        await _sleep(200);
+    }
+    return false;
+}
+
+async function promptSshHostKeyDecision({ host, port, fingerprint, isUpdate, raw } = {}) {
+    const safeHost = host ? String(host) : '';
+    const safePort = (port !== undefined && port !== null) ? String(port) : '';
+    const safeFp = fingerprint ? String(fingerprint) : '';
+    const safeRaw = raw ? String(raw) : '';
+
+    const allWins = (BrowserWindow.getAllWindows ? BrowserWindow.getAllWindows() : []) || [];
+    const win = (BrowserWindow.getFocusedWindow ? BrowserWindow.getFocusedWindow() : null) || allWins[0] || null;
+    const hasUi = win && win.webContents && !win.webContents.isDestroyed();
+
+    if (hasUi) {
+        const requestId = `ssh_hostkey_${Date.now()}_${++sshHostKeyPromptSeq}`;
+        try { if (win.isMinimized && win.isMinimized()) win.restore(); } catch (e) { }
+        try { win.show(); } catch (e) { }
+        try { win.focus(); } catch (e) { }
+        try { if (win.moveTop) win.moveTop(); } catch (e) { }
+        try { win.flashFrame(true); } catch (e) { }
+        try { app.focus({ steal: true }); } catch (e) { try { app.focus(); } catch (e2) { } }
+        try { shell.beep(); } catch (e) { }
+
+        const payload = { requestId, host: safeHost, port: safePort, fingerprint: safeFp, isUpdate: !!isUpdate, raw: safeRaw };
+        try { win.webContents.send('ssh-hostkey-prompt', payload); } catch (e) { }
+
+        const choice = await new Promise((resolve) => {
+            const timer = setTimeout(() => { sshHostKeyPromptWaiters.delete(requestId); resolve('cancel'); }, 5 * 60 * 1000);
+            sshHostKeyPromptWaiters.set(requestId, {
+                resolve: (c) => { clearTimeout(timer); resolve(c || 'cancel'); }
+            });
+        });
+
+        try { win.flashFrame(false); } catch (e) { }
+        return choice;
+    }
+
+    try {
+        const title = isUpdate ? 'SSH Host Key Changed' : 'SSH Host Key';
+        const message = isUpdate
+            ? 'The SSH host key does not match your cached key. Continue only if you trust this change.'
+            : 'First-time connection requires confirming the host key. Verify the fingerprint before continuing.';
+        const detail = `Host: ${safeHost}\nPort: ${safePort}${safeFp ? `\nFingerprint: ${safeFp}` : ''}${safeRaw ? `\n\n${safeRaw}` : ''}`;
+        const { response } = await dialog.showMessageBox(win || null, {
+            type: 'warning',
+            buttons: [isUpdate ? 'Update & Continue (y)' : 'Trust & Continue (y)', 'Continue Once (n)', 'Cancel'],
+            defaultId: 0,
+            cancelId: 2,
+            title,
+            message,
+            detail,
+            noLink: true,
+        });
+        return response === 0 ? 'y' : (response === 1 ? 'n' : 'cancel');
+    } catch (e) {
+        return 'cancel';
+    }
+}
+
+function parseSshProxy(proxyStr) {
+    const u = new URL(String(proxyStr || '').trim());
+    if (u.protocol !== 'ssh:') throw new Error('Invalid ssh proxy');
+
+    const host = u.hostname || '';
+    const port = u.port ? Number.parseInt(u.port, 10) : 22;
+    if (!host) throw new Error('SSH host missing');
+    if (!Number.isFinite(port) || port <= 0) throw new Error('SSH port invalid');
+
+    const keepAliveRaw = u.searchParams.get('keepalive') || u.searchParams.get('ServerAliveInterval') || '';
+    const keepAlive = Number.parseInt(keepAliveRaw, 10);
+    const hostKeyPolicyRaw = String(
+        u.searchParams.get('hostkeyPolicy')
+        || u.searchParams.get('hostKeyPolicy')
+        || u.searchParams.get('hostkey_policy')
+        || u.searchParams.get('autoHostKey')
+        || u.searchParams.get('auto_hostkey')
+        || ''
+    ).trim().toLowerCase();
+    // Default aligns with many commercial tools: no user prompt.
+    // NOTE: accept-all is unsafe (will auto accept even on key mismatch).
+    let hostKeyPolicy = 'accept-all'; // ask | accept-new | accept-all
+    if (hostKeyPolicyRaw) {
+        if (['accept-all', 'accept_all', 'all', 'unsafe', 'trust-all', 'trust_all'].includes(hostKeyPolicyRaw)) hostKeyPolicy = 'accept-all';
+        else if (['accept-new', 'accept_new', 'new', 'auto', '1', 'true', 'yes', 'y'].includes(hostKeyPolicyRaw)) hostKeyPolicy = 'accept-new';
+        else if (['ask', 'prompt', '0', 'false', 'no', 'n'].includes(hostKeyPolicyRaw)) hostKeyPolicy = 'ask';
+    }
+
+    return {
+        host,
+        port,
+        username: u.username || '',
+        password: u.password || '',
+        keyPath: u.searchParams.get('key') || u.searchParams.get('identity') || '',
+        hostKey: u.searchParams.get('hostkey') || u.searchParams.get('hostKey') || '',
+        hostKeyPolicy,
+        verbose: (u.searchParams.get('verbose') === '1' || u.searchParams.get('v') === '1'),
+        strictHostKeyChecking: u.searchParams.get('strict') || u.searchParams.get('StrictHostKeyChecking') || 'accept-new',
+        keepAliveInterval: (Number.isFinite(keepAlive) && keepAlive > 0) ? keepAlive : 30,
+    };
+}
+
+function findPlinkPath() {
+    const override = String(process.env.GEEKEZ_PLINK_PATH || '').trim();
+    if (override && fs.existsSync(override)) return override;
+
+    if (process.platform !== 'win32') return null;
+    const envPath = String(process.env.PATH || '');
+    const parts = envPath.split(';').map(s => s.trim()).filter(Boolean);
+    for (const dir of parts) {
+        try {
+            const full = path.join(dir, 'plink.exe');
+            if (fs.existsSync(full)) return full;
+        } catch (e) { }
+    }
+
+    const candidates = [
+        'C:\\Program Files\\PuTTY\\plink.exe',
+        'C:\\Program Files (x86)\\PuTTY\\plink.exe',
+        'D:\\Program Files\\PuTTY\\plink.exe',
+        'D:\\Program Files (x86)\\PuTTY\\plink.exe',
+    ];
+    for (const p of candidates) {
+        try { if (fs.existsSync(p)) return p; } catch (e) { }
+    }
+    return null;
+}
+
+const plinkLegacyPromptsCache = new Map();
+function plinkSupportsLegacyStdioPrompts(plinkPath) {
+    const key = String(plinkPath || '').trim();
+    if (!key) return false;
+    if (plinkLegacyPromptsCache.has(key)) return plinkLegacyPromptsCache.get(key);
+
+    let supported = false;
+    try {
+        const r = spawnSync(key, ['-V'], { windowsHide: true, encoding: 'utf8' });
+        const out = `${r.stdout || ''}\n${r.stderr || ''}`;
+        const m = out.match(/Release\s+(\d+)\.(\d+)/i);
+        if (m) {
+            const major = Number.parseInt(m[1], 10);
+            const minor = Number.parseInt(m[2], 10);
+            supported = (Number.isFinite(major) && Number.isFinite(minor) && (major > 0 || minor >= 82));
+        }
+    } catch (e) { }
+    plinkLegacyPromptsCache.set(key, supported);
+    return supported;
+}
+
+async function startSshDynamicProxy(proxyStr, profileDir) {
+    const cfg = parseSshProxy(proxyStr);
+
+    const localPort = await getPort();
+    const knownHosts = path.join(profileDir, 'known_hosts');
+    const logPath = path.join(profileDir, 'ssh_run.log');
+    const logFd = fs.openSync(logPath, 'a');
+
+    const dest = cfg.username ? `${cfg.username}@${cfg.host}` : cfg.host;
+
+    const writeLogLine = (line) => {
+        try { fs.writeSync(logFd, Buffer.from(`${line}\n`, 'utf8')); } catch (e) { }
+    };
+
+    // Best-effort cleanup: leftover password files (avoid leaving secrets on disk)
+    try {
+        for (const name of fs.readdirSync(profileDir)) {
+            if (!name.startsWith('ssh_pw_') || !name.endsWith('.txt')) continue;
+            const full = path.join(profileDir, name);
+            try { fs.unlinkSync(full); } catch (e) { }
+        }
+    } catch (e) { }
+
+    writeLogLine(`[${new Date().toISOString()}] SSH dynamic proxy start: host=${cfg.host} port=${cfg.port} user=${cfg.username ? '***' : ''} localPort=${localPort} auth=${cfg.password ? 'password' : (cfg.keyPath ? 'key' : 'agent')}`);
+
+    const tryUnlink = (p) => { try { fs.unlinkSync(p); return true; } catch (e) { return false; } };
+
+    if (cfg.password) {
+        if (process.platform !== 'win32') {
+            try { fs.closeSync(logFd); } catch (e) { }
+            throw new Error('SSH password auth is only supported on Windows with plink.exe; use ssh key/agent instead.');
+        }
+        const plinkPath = findPlinkPath();
+        if (!plinkPath) {
+            try { fs.closeSync(logFd); } catch (e) { }
+            throw new Error('plink.exe not found; install PuTTY or set GEEKEZ_PLINK_PATH');
+        }
+
+        const pwFile = path.join(profileDir, `ssh_pw_${Date.now()}_${Math.random().toString(16).slice(2)}.txt`);
+        try { fs.writeFileSync(pwFile, cfg.password, { encoding: 'utf8' }); } catch (e) { }
+
+        const args = [
+            '-ssh',
+            '-no-antispoof',
+            '-N',
+            '-D', `127.0.0.1:${localPort}`,
+            '-P', String(cfg.port),
+            '-pwfile', pwFile,
+        ];
+        // PuTTY/plink 0.82+ writes interactive security prompts to the Windows console (WriteConsole),
+        // which becomes invisible/non-capturable in GUI apps. Force legacy stdio prompts so we can
+        // surface a visible confirmation dialog and answer via stdin.
+        if (!cfg.hostKey && plinkSupportsLegacyStdioPrompts(plinkPath)) {
+            args.unshift('-legacy-stdio-prompts');
+        }
+        if (cfg.verbose || String(process.env.GEEKEZ_SSH_VERBOSE || '') === '1') args.push('-v');
+        if (cfg.hostKey) {
+            args.push('-hostkey', cfg.hostKey, '-batch');
+        }
+        if (cfg.username) args.push('-l', cfg.username);
+        args.push(cfg.host);
+
+        const proc = spawn(plinkPath, args, { cwd: profileDir, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+        let spawnErr = null;
+        proc.once('error', (e) => { spawnErr = e; });
+
+        let cancelled = false;
+        const hostPortKey = `${cfg.host}:${cfg.port}`;
+        let hostKeyFingerprint = '';
+        let promptTask = null;
+        let textBuf = '';
+
+        const writeLog = (buf) => { try { fs.writeSync(logFd, buf); } catch (e) { } };
+
+        const maybeHandlePrompt = async () => {
+            if (promptTask || cfg.hostKey) return;
+            const isUpdate = textBuf.includes('Update cached key?');
+            if (!textBuf.includes('Store key in cache?') && !isUpdate) return;
+            promptTask = (async () => {
+                if (!isUpdate && trustedSshHosts.has(hostPortKey)) {
+                    try { proc.stdin.write('y\n'); } catch (e) { }
+                    return;
+                }
+
+                // Optional auto policy to avoid any prompt (similar to many commercial tools).
+                // accept-new: auto trust only when key is missing (Store key...).
+                // accept-all: auto trust even when cached key mismatch (Update cached key...) (unsafe).
+                if (cfg.hostKeyPolicy === 'accept-all' || (!isUpdate && cfg.hostKeyPolicy === 'accept-new')) {
+                    if (!isUpdate) trustedSshHosts.add(hostPortKey);
+                    try { proc.stdin.write('y\n'); } catch (e) { }
+                    return;
+                }
+
+                const choice = await promptSshHostKeyDecision({
+                    host: cfg.host,
+                    port: cfg.port,
+                    fingerprint: hostKeyFingerprint,
+                    isUpdate,
+                    raw: textBuf.slice(-2000),
+                });
+                if (choice === 'y' || choice === 'n') {
+                    if (!isUpdate && choice === 'y') trustedSshHosts.add(hostPortKey);
+                    try { proc.stdin.write(`${choice}\n`); } catch (e) { }
+                    return;
+                }
+
+                cancelled = true;
+                await forceKill(proc.pid);
+            })();
+        };
+
+        const onText = (t) => {
+            textBuf += t;
+            const m = textBuf.match(/(?:The server's|The new)\s+[^\r\n]+ key fingerprint is:\s*\r?\n\s*([^\r\n]+)\r?\n/i);
+            if (m && m[1]) hostKeyFingerprint = String(m[1]).trim();
+            void maybeHandlePrompt();
+        };
+
+        if (proc.stdout) proc.stdout.on('data', (d) => { writeLog(d); onText(String(d)); });
+        if (proc.stderr) proc.stderr.on('data', (d) => { writeLog(d); onText(String(d)); });
+
+        const ready = await waitForTcpPort('127.0.0.1', localPort, 60000, () => cancelled || proc.exitCode !== null);
+        if (promptTask) await promptTask.catch(() => { });
+        if (spawnErr) {
+            tryUnlink(pwFile);
+            try { fs.closeSync(logFd); } catch (e) { }
+            throw new Error(`SSH spawn failed: ${spawnErr.message || String(spawnErr)}`);
+        }
+        if (cancelled) {
+            tryUnlink(pwFile);
+            try { fs.closeSync(logFd); } catch (e) { }
+            throw new Error('SSH host key not trusted');
+        }
+        if (!ready || proc.exitCode !== null) {
+            await forceKill(proc.pid);
+            // plink may keep the pwfile handle open until exit; retry deletion briefly after kill
+            for (let i = 0; i < 20; i++) {
+                if (tryUnlink(pwFile)) break;
+                await _sleep(100);
+            }
+            try { fs.closeSync(logFd); } catch (e) { }
+            throw new Error(`SSH tunnel not ready (check ${logPath})`);
+        }
+        tryUnlink(pwFile);
+        return { pid: proc.pid, localPort, logFd };
+    }
+
+    const cmd = process.platform === 'win32' ? 'ssh.exe' : 'ssh';
+    const strictHostKeyChecking = (cfg.hostKeyPolicy === 'accept-all') ? 'no' : String(cfg.strictHostKeyChecking || 'accept-new');
+    const args = [
+        '-N',
+        '-D', `127.0.0.1:${localPort}`,
+        '-p', String(cfg.port),
+        '-o', 'ExitOnForwardFailure=yes',
+        '-o', 'BatchMode=yes',
+        '-o', `StrictHostKeyChecking=${strictHostKeyChecking}`,
+        '-o', `UserKnownHostsFile=${knownHosts}`,
+        '-o', `ServerAliveInterval=${cfg.keepAliveInterval}`,
+        '-o', 'ServerAliveCountMax=3',
+    ];
+    if (cfg.verbose || String(process.env.GEEKEZ_SSH_VERBOSE || '') === '1') args.push('-v');
+    if (cfg.keyPath) {
+        args.push('-i', cfg.keyPath, '-o', 'IdentitiesOnly=yes');
+    }
+    args.push(dest);
+
+    const proc = spawn(cmd, args, { cwd: profileDir, stdio: ['ignore', logFd, logFd], windowsHide: true });
+    let spawnErr = null;
+    proc.once('error', (e) => { spawnErr = e; });
+
+    const ready = await waitForTcpPort('127.0.0.1', localPort, 6000, () => proc.exitCode !== null);
+    if (spawnErr) {
+        try { fs.closeSync(logFd); } catch (e) { }
+        throw new Error(`SSH spawn failed: ${spawnErr.message || String(spawnErr)}`);
+    }
+    if (!ready || proc.exitCode !== null) {
+        await forceKill(proc.pid);
+        try { fs.closeSync(logFd); } catch (e) { }
+        throw new Error(`SSH tunnel not ready (check ${logPath})`);
+    }
+    return { pid: proc.pid, localPort, logFd };
 }
 
 function getChromiumPath() {
@@ -149,76 +499,177 @@ function _renderDashboardHtml(profileId) {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>GeekEZ 仪表盘</title>
   <style>
-    :root{--bg:#0b1020;--card:#121a33;--muted:#9aa4c3;--text:#e9eeff;--ok:#37d67a;--bad:#ff4d4f;--line:rgba(255,255,255,.08);}
+    :root{
+      --bg:#1e1e2d;
+      --card:#2b2b40;
+      --text:#ffffff;
+      --muted:#a0a0ba;
+      --accent:#00e0ff;
+      --danger:#f64e60;
+      --ok:#27ae60;
+      --border:#3f4254;
+      --line:rgba(255,255,255,.08);
+      --shadow:rgba(0,0,0,.35);
+    }
     *{box-sizing:border-box}
-    body{margin:0;background:radial-gradient(1200px 700px at 20% 10%,#1a2b63,transparent 60%),radial-gradient(900px 600px at 90% 0,#2b1a63,transparent 55%),var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,'Microsoft YaHei',sans-serif}
-    .wrap{max-width:1100px;margin:24px auto;padding:0 16px}
-    .top{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
-    h1{font-size:18px;margin:0;letter-spacing:.5px}
-    .sub{color:var(--muted);font-size:12px}
+    body{
+      margin:0;
+      color:var(--text);
+      font-family:'Segoe UI',system-ui,-apple-system,Roboto,'Microsoft YaHei',sans-serif;
+      background:
+        radial-gradient(1200px 700px at 15% 10%, rgba(0,224,255,.12), transparent 55%),
+        radial-gradient(900px 600px at 85% 0%, rgba(124,58,237,.18), transparent 55%),
+        var(--bg);
+    }
+    .wrap{max-width:1180px;margin:18px auto;padding:0 16px 28px}
+    .header{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;margin-top:8px}
+    .brand{display:flex;flex-direction:column;gap:4px}
+    .title{font-size:18px;font-weight:700;letter-spacing:.2px}
+    .meta{font-size:12px;color:var(--muted)}
+    .meta code{color:var(--text);background:rgba(0,0,0,.25);border:1px solid var(--line);padding:2px 6px;border-radius:6px}
+    .actions{display:flex;gap:8px;flex-wrap:wrap}
+    .btn{cursor:pointer;border:1px solid var(--border);background:rgba(0,0,0,.18);color:var(--text);border-radius:10px;padding:8px 10px;font-size:12px;line-height:1}
+    .btn:hover{border-color:rgba(0,224,255,.6);box-shadow:0 0 0 2px rgba(0,224,255,.12) inset}
+    .btn.primary{background:rgba(0,224,255,.14);border-color:rgba(0,224,255,.45)}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
     .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px;margin-top:12px}
-    .card{grid-column:span 12;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid var(--line);border-radius:14px;padding:14px}
-    @media (min-width:920px){.half{grid-column:span 6}.third{grid-column:span 4}}
-    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    .tag{display:inline-flex;gap:6px;align-items:center;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:rgba(0,0,0,.18);font-size:12px}
+    .card{grid-column:span 12;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:0 10px 30px var(--shadow)}
+    .hero{display:flex;gap:12px;justify-content:space-between;align-items:stretch;flex-wrap:wrap}
+    .heroLeft{min-width:260px;flex:1}
+    .heroLabel{font-size:12px;color:var(--muted)}
+    .heroIpRow{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-top:6px}
+    .heroIp{font-size:34px;font-weight:800;letter-spacing:.5px;text-shadow:0 0 18px rgba(0,224,255,.16)}
+    .pill{display:inline-flex;gap:6px;align-items:center;padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.18);font-size:12px}
     .dot{width:8px;height:8px;border-radius:50%}
+    .dot.ok{background:var(--ok)}
+    .dot.bad{background:var(--danger)}
+    .heroSub{margin-top:6px;font-size:12px;color:var(--muted)}
+    .heroRight{display:flex;gap:8px;align-items:flex-start;justify-content:flex-end;flex-wrap:wrap}
+    .kv{display:grid;grid-template-columns:repeat(12,1fr);gap:10px}
+    .item{grid-column:span 12}
+    @media (min-width:920px){
+      .span6{grid-column:span 6}
+      .span12{grid-column:span 12}
+      .item.half{grid-column:span 6}
+      .item.third{grid-column:span 4}
+    }
     .k{color:var(--muted);font-size:12px}
-    .v{font-size:13px}
-    pre{margin:8px 0 0;padding:12px;border-radius:12px;overflow:auto;background:rgba(0,0,0,.25);border:1px solid var(--line);font-size:12px;line-height:1.35}
-    a{color:#a6c8ff;text-decoration:none}
-    a:hover{text-decoration:underline}
-    .btn{cursor:pointer;border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--text);border-radius:10px;padding:8px 10px;font-size:12px}
-    .btn:hover{background:rgba(255,255,255,.10)}
-    .err{color:var(--bad);white-space:pre-wrap}
+    .v{font-size:13px;word-break:break-word}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Courier New',monospace}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .link{color:#a6c8ff;text-decoration:none}
+    .link:hover{text-decoration:underline}
+    .copy{cursor:pointer;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.18);color:var(--text);border-radius:8px;padding:5px 8px;font-size:12px}
+    .copy:hover{border-color:rgba(0,224,255,.6)}
+    pre{margin:10px 0 0;padding:12px;border-radius:12px;overflow:auto;background:rgba(0,0,0,.22);border:1px solid var(--line);font-size:12px;line-height:1.35}
+    details{margin-top:10px}
+    summary{cursor:pointer;color:var(--text);font-weight:600}
+    .err{margin-top:12px;color:var(--danger);white-space:pre-wrap}
+    .otpBox{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .otpCode{font-size:24px;font-weight:800;letter-spacing:2px}
+    .bar{position:relative;height:8px;flex:1;min-width:120px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;border:1px solid rgba(255,255,255,.10)}
+    .bar>div{height:100%;background:rgba(0,224,255,.55);width:0%}
   </style>
   <script>window.__PROFILE_ID__=${JSON.stringify(safeId)};</script>
 </head>
 <body>
   <div class="wrap">
-    <div class="top">
-      <div>
-        <h1>GeekEZ 指纹窗口仪表盘</h1>
-        <div class="sub">Profile: <span id="pid"></span> · API: <span id="api"></span></div>
+    <div class="header">
+      <div class="brand">
+        <div class="title">GeekEZ 仪表盘</div>
+        <div class="meta">Profile: <code id="pid"></code> · API: <span id="api"></span></div>
       </div>
-      <div class="row">
-        <button class="btn" id="btnReload">刷新</button>
+      <div class="actions">
+        <button class="btn primary" id="btnAll">刷新全部</button>
+        <button class="btn" id="btnIp">刷新 IP</button>
+        <button class="btn" id="btnNet">刷新网络信息</button>
         <button class="btn" id="btnCopyWs">复制 WS</button>
       </div>
     </div>
 
     <div class="grid">
-      <div class="card third">
-        <div class="row">
-          <span class="tag"><span class="dot" id="dotRun"></span><span id="runText">运行中</span></span>
-          <span class="tag">IP: <span id="ip">-</span></span>
+      <div class="card hero">
+        <div class="heroLeft">
+          <div class="heroLabel">代理出口 IP</div>
+          <div class="heroIpRow">
+            <div class="heroIp" id="ip">-</div>
+            <span class="pill"><span class="dot" id="dotRun"></span><span id="runText">-</span></span>
+          </div>
+          <div class="heroSub" id="ipMeta">来源: -</div>
+          <div class="heroSub">名称: <span id="name">-</span></div>
+          <div class="heroSub">代理: <span class="mono" id="proxyMasked">-</span></div>
         </div>
-        <div style="margin-top:10px" class="row">
-          <div><div class="k">名称</div><div class="v" id="name">-</div></div>
-          <div><div class="k">备注</div><div class="v" id="remark">-</div></div>
-        </div>
-        <div style="margin-top:10px">
-          <div class="k">代理</div>
-          <div class="v" id="proxy">-</div>
+        <div class="heroRight">
+          <button class="btn" id="btnCopyIp">复制 IP</button>
+          <button class="btn" id="btnCopyProxy">复制代理</button>
+          <button class="btn" id="btnCopyProfile">复制 ProfileID</button>
         </div>
       </div>
 
-      <div class="card half">
-        <div class="k">运行信息</div>
-        <pre id="runtime">-</pre>
+      <div class="card span6">
+        <div class="row" style="justify-content:space-between">
+          <div class="k">网络信息</div>
+          <span class="pill">IP: <span id="netIp">-</span></span>
+        </div>
+        <div class="kv" style="margin-top:10px">
+          <div class="item half"><div class="k">位置</div><div class="v" id="loc">-</div></div>
+          <div class="item half"><div class="k">时区</div><div class="v" id="tz">-</div></div>
+          <div class="item half"><div class="k">ASN / 组织</div><div class="v" id="org">-</div></div>
+          <div class="item half"><div class="k">坐标</div><div class="v" id="geo">-</div></div>
+          <div class="item half"><div class="k">邮编</div><div class="v" id="postal">-</div></div>
+          <div class="item half"><div class="k">来源</div><div class="v" id="netSource">-</div></div>
+        </div>
       </div>
 
-      <div class="card half">
-        <div class="k">指纹配置（profiles.json）</div>
-        <pre id="fingerprint">-</pre>
+      <div class="card span6">
+        <div class="k">运行 / 调试</div>
+        <div class="kv" style="margin-top:10px">
+          <div class="item"><div class="k">WS</div><div class="row"><div class="v mono" id="ws">-</div><button class="copy" id="copyWs">复制</button></div></div>
+          <div class="item"><div class="k">HTTP</div><div class="row"><div class="v mono" id="http">-</div><button class="copy" id="copyHttp">复制</button></div></div>
+          <div class="item third"><div class="k">debugPort</div><div class="v mono" id="debugPort">-</div></div>
+          <div class="item third"><div class="k">localPort</div><div class="v mono" id="localPort">-</div></div>
+          <div class="item third"><div class="k">sshLocalPort</div><div class="v mono" id="sshLocalPort">-</div></div>
+        </div>
       </div>
 
-      <div class="card half">
-        <div class="k">浏览器真实值（当前页面）</div>
-        <pre id="browserInfo">-</pre>
+      <div class="card span6">
+        <div class="k">Profile 信息</div>
+        <div class="kv" style="margin-top:10px">
+          <div class="item half"><div class="k">名称</div><div class="v" id="pName">-</div></div>
+          <div class="item half"><div class="k">创建时间</div><div class="v" id="createdAt">-</div></div>
+          <div class="item"><div class="k">备注</div><div class="row"><div class="v" id="remark">-</div><button class="copy" id="copyRemark">复制</button></div></div>
+          <div class="item half"><div class="k">preProxyOverride</div><div class="v mono" id="preProxyOverride">-</div></div>
+          <div class="item half"><div class="k">标签</div><div class="v" id="tags">-</div></div>
+        </div>
       </div>
 
-      <div class="card">
-        <div class="k">错误</div>
+      <div class="card span6" id="acctCard" style="display:none">
+        <div class="k">账号 / 2FA</div>
+        <div class="kv" style="margin-top:10px">
+          <div class="item half"><div class="k">邮箱</div><div class="v mono" id="acctEmail">-</div></div>
+          <div class="item half"><div class="k">辅助邮箱</div><div class="v mono" id="acctAux">-</div></div>
+          <div class="item">
+            <div class="k">动态码</div>
+            <div class="otpBox">
+              <div class="otpCode mono" id="otpCode">------</div>
+              <div class="pill">剩余 <span id="otpRemain">-</span>s</div>
+              <button class="copy" id="copyOtp">复制</button>
+              <a class="link" id="otpFallback" href="#" target="_blank" rel="noreferrer" style="display:none">2fa.show</a>
+              <div class="bar" title="倒计时"><div id="otpBar"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card span12">
+        <details>
+          <summary>指纹配置</summary>
+          <pre id="fingerprint">-</pre>
+        </details>
+        <details>
+          <summary>浏览器信息</summary>
+          <pre id="browserInfo">-</pre>
+        </details>
         <div class="err" id="err"></div>
       </div>
     </div>
@@ -227,61 +678,293 @@ function _renderDashboardHtml(profileId) {
   <script>
     const profileId = window.__PROFILE_ID__ || '';
     const apiBase = location.origin;
-    document.getElementById('pid').textContent = profileId || '(none)';
-    document.getElementById('api').textContent = apiBase;
+    const $ = (id) => document.getElementById(id);
 
-    function setErr(msg){ document.getElementById('err').textContent = msg || ''; }
+    function pretty(o) { return JSON.stringify(o, null, 2); }
+    function setErr(msg) { $('err').textContent = msg || ''; }
 
-    function pretty(o){ return JSON.stringify(o, null, 2); }
+    function setText(id, text) {
+      const el = $(id);
+      if (!el) return;
+      el.textContent = (text === undefined || text === null || text === '') ? '-' : String(text);
+    }
 
-    async function getJson(path){
+    function fmtTime(ms) {
+      const n = Number(ms);
+      if (!Number.isFinite(n) || n <= 0) return '-';
+      try { return new Date(n).toLocaleString(); } catch (e) { return String(ms); }
+    }
+
+    function maskProxy(proxyStr) {
+      const raw = String(proxyStr || '').trim();
+      if (!raw) return '';
+      try {
+        const u = new URL(raw);
+        const auth = u.username ? (decodeURIComponent(u.username) + (u.password ? ':***' : '') + '@') : '';
+        const host = u.hostname + (u.port ? ':' + u.port : '');
+        const q = u.search || '';
+        return u.protocol + '//' + auth + host + q;
+      } catch (e) {
+        return raw;
+      }
+    }
+
+    async function copyText(text) {
+      const s = String(text || '');
+      if (!s) return;
+      try {
+        await navigator.clipboard.writeText(s);
+      } catch (e) {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = s;
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          ta.remove();
+        } catch (e2) {
+          prompt('复制：', s);
+        }
+      }
+    }
+
+    async function getJson(path) {
       const res = await fetch(apiBase + path, { cache: 'no-store' });
       const json = await res.json().catch(() => ({}));
       if (!json || json.success !== true) throw new Error((json && (json.error || json.msg)) || 'API error');
       return json.data;
     }
 
-    async function load(){
-      setErr('');
-      if (!profileId) { setErr('缺少 profile 参数'); return; }
+    let totpTimer = null;
+    let currentSecret = null;
 
-      const profile = await getJson('/profiles/' + encodeURIComponent(profileId));
-      document.getElementById('name').textContent = profile.name || '-';
-      document.getElementById('remark').textContent = profile.remark || '-';
-      document.getElementById('proxy').textContent = (profile.proxyStr || '-').replace(/:(?!\\/\\/)([^@]{0,64})@/g, ':***@');
-      document.getElementById('fingerprint').textContent = pretty(profile.fingerprint || {});
-
-      const runtime = await getJson('/profiles/' + encodeURIComponent(profileId) + '/runtime').catch(() => ({}));
-      document.getElementById('runtime').textContent = pretty(runtime || {});
-      const running = !!runtime.running;
-      document.getElementById('dotRun').style.background = running ? 'var(--ok)' : 'var(--bad)';
-      document.getElementById('runText').textContent = running ? '运行中' : '未运行';
-
-      const ip = await getJson('/profiles/' + encodeURIComponent(profileId) + '/ip').catch(() => null);
-      document.getElementById('ip').textContent = (ip && ip.ip) ? ip.ip : '-';
-
-      const browserInfo = {
-        userAgent: navigator.userAgent,
-        platform: navigator.platform,
-        languages: navigator.languages,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        screen: { width: screen.width, height: screen.height, availWidth: screen.availWidth, availHeight: screen.availHeight, colorDepth: screen.colorDepth, pixelDepth: screen.pixelDepth },
-        window: { innerWidth: innerWidth, innerHeight: innerHeight, outerWidth: outerWidth, outerHeight: outerHeight, devicePixelRatio: devicePixelRatio },
-        hardwareConcurrency: navigator.hardwareConcurrency,
-        deviceMemory: navigator.deviceMemory
-      };
-      document.getElementById('browserInfo').textContent = pretty(browserInfo);
-
-      const btnCopy = document.getElementById('btnCopyWs');
-      btnCopy.onclick = async () => {
-        const ws = (runtime && runtime.ws) ? runtime.ws : '';
-        if (!ws) { setErr('WS 为空（可能未开启远程调试或未运行）'); return; }
-        try { await navigator.clipboard.writeText(ws); } catch (e) { setErr('复制失败：' + e); }
-      };
+    function stopTotp() {
+      if (totpTimer) clearInterval(totpTimer);
+      totpTimer = null;
+      currentSecret = null;
+      $('acctCard').style.display = 'none';
     }
 
-    document.getElementById('btnReload').onclick = load;
-    load().catch(e => setErr(String(e && e.stack ? e.stack : e)));
+    function base32ToBytes(input) {
+      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+      const clean = String(input || '').toUpperCase().replace(/[^A-Z2-7]/g, '');
+      let bits = 0;
+      let value = 0;
+      const out = [];
+      for (const ch of clean) {
+        const idx = alphabet.indexOf(ch);
+        if (idx < 0) continue;
+        value = (value << 5) | idx;
+        bits += 5;
+        while (bits >= 8) {
+          out.push((value >>> (bits - 8)) & 0xff);
+          bits -= 8;
+        }
+      }
+      return new Uint8Array(out);
+    }
+
+    async function computeTotp(secret) {
+      if (!secret) return null;
+      if (!window.crypto || !crypto.subtle) return null;
+      try {
+        const keyBytes = base32ToBytes(secret);
+        if (!keyBytes || !keyBytes.length) return null;
+
+        const counter = Math.floor(Date.now() / 30000);
+        const buf = new ArrayBuffer(8);
+        const dv = new DataView(buf);
+        dv.setUint32(0, 0, false);
+        dv.setUint32(4, counter, false);
+
+        const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+        const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, buf));
+        const off = sig[sig.length - 1] & 0x0f;
+        const bin = ((sig[off] & 0x7f) << 24) | ((sig[off + 1] & 0xff) << 16) | ((sig[off + 2] & 0xff) << 8) | (sig[off + 3] & 0xff);
+        return String(bin % 1000000).padStart(6, '0');
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function startTotp(email, aux, secret) {
+      $('acctCard').style.display = '';
+      setText('acctEmail', email);
+      setText('acctAux', aux);
+
+      currentSecret = secret;
+
+      const fallback = $('otpFallback');
+      fallback.style.display = 'none';
+      fallback.href = '#';
+
+      $('copyOtp').onclick = async () => {
+        const code = $('otpCode').textContent;
+        if (code && code !== '------' && code !== 'ERR') await copyText(code);
+      };
+
+      const tick = async () => {
+        const remain = 30 - (Math.floor(Date.now() / 1000) % 30);
+        setText('otpRemain', remain);
+        $('otpBar').style.width = (remain / 30 * 100).toFixed(0) + '%';
+
+        const code = await computeTotp(currentSecret);
+        if (code) {
+          setText('otpCode', code);
+        } else {
+          setText('otpCode', 'ERR');
+          fallback.style.display = '';
+          fallback.href = 'https://2fa.show/2fa/' + encodeURIComponent(currentSecret);
+        }
+      };
+
+      tick();
+      if (totpTimer) clearInterval(totpTimer);
+      totpTimer = setInterval(tick, 1000);
+    }
+
+    function setRunning(running) {
+      const dot = $('dotRun');
+      const txt = $('runText');
+      if (running) {
+        dot.className = 'dot ok';
+        txt.textContent = '运行中';
+      } else {
+        dot.className = 'dot bad';
+        txt.textContent = '未运行';
+      }
+    }
+
+    async function refreshProfile() {
+      const p = await getJson('/profiles/' + encodeURIComponent(profileId));
+      setText('pid', profileId || '(none)');
+      setText('api', apiBase);
+
+      setText('name', p.name || '-');
+      setText('pName', p.name || '-');
+      setText('createdAt', fmtTime(p.createdAt));
+      setText('remark', p.remark || '-');
+      setText('preProxyOverride', p.preProxyOverride || '-');
+      setText('tags', Array.isArray(p.tags) && p.tags.length ? p.tags.join(', ') : '-');
+
+      setText('proxyMasked', maskProxy(p.proxyStr || '') || '-');
+
+      $('btnCopyProxy').onclick = async () => { await copyText(p.proxyStr || ''); };
+      $('btnCopyProfile').onclick = async () => { await copyText(profileId); };
+      $('copyRemark').onclick = async () => { await copyText(p.remark || ''); };
+
+      setText('fingerprint', pretty(p.fingerprint || {}));
+
+      const remark = String(p.remark || '');
+      const parts = remark.split('----').map(s => String(s || '').trim());
+      if (parts.length >= 3) {
+        const email = parts[0] || '';
+        const secret = parts[parts.length - 1] || '';
+        const aux = (parts.length >= 4) ? (parts[2] || '') : '';
+        if (email && secret) startTotp(email, aux, secret);
+        else stopTotp();
+      } else {
+        stopTotp();
+      }
+
+      return p;
+    }
+
+    async function refreshRuntime() {
+      const r = await getJson('/profiles/' + encodeURIComponent(profileId) + '/runtime').catch(() => ({ running: false }));
+      setRunning(!!r.running);
+
+      const ws = r.ws || '';
+      const http = r.http || '';
+      setText('ws', ws || '-');
+      setText('http', http || '-');
+      setText('debugPort', r.debugPort || '-');
+      setText('localPort', r.localPort || '-');
+      setText('sshLocalPort', r.sshLocalPort || '-');
+
+      $('btnCopyWs').onclick = async () => { if (ws) await copyText(ws); };
+      $('copyWs').onclick = async () => { if (ws) await copyText(ws); };
+      $('copyHttp').onclick = async () => { if (http) await copyText(http); };
+
+      return r;
+    }
+
+    async function refreshIp() {
+      setText('ip', '...');
+      setText('ipMeta', '来源: ...');
+      $('btnCopyIp').onclick = null;
+
+      try {
+        const ip = await getJson('/profiles/' + encodeURIComponent(profileId) + '/ip');
+        setText('ip', ip.ip || '-');
+        setText('ipMeta', '来源: ' + (ip.source || '-'));
+        $('btnCopyIp').onclick = async () => { await copyText(ip.ip || ''); };
+      } catch (e) {
+        setText('ip', '-');
+        setText('ipMeta', '来源: -');
+      }
+    }
+
+    async function refreshNetinfo() {
+      setText('loc', '...');
+      setText('tz', '...');
+      setText('org', '...');
+      setText('geo', '...');
+      setText('postal', '...');
+      setText('netIp', '...');
+      setText('netSource', '...');
+
+      try {
+        const n = await getJson('/profiles/' + encodeURIComponent(profileId) + '/netinfo');
+        setText('netIp', n.ip || '-');
+        setText('loc', [n.city, n.region, n.country].filter(Boolean).join(', ') || '-');
+        setText('tz', n.timezone || '-');
+        setText('org', [n.asn, n.org].filter(Boolean).join(' ') || '-');
+        const lat = (n.latitude !== undefined && n.latitude !== null) ? String(n.latitude) : '';
+        const lon = (n.longitude !== undefined && n.longitude !== null) ? String(n.longitude) : '';
+        setText('geo', (lat && lon) ? (lat + ', ' + lon) : '-');
+        setText('postal', n.postal || '-');
+        setText('netSource', n.source || '-');
+      } catch (e) {
+        setText('netIp', '-');
+        setText('loc', '-');
+        setText('tz', '-');
+        setText('org', '-');
+        setText('geo', '-');
+        setText('postal', '-');
+        setText('netSource', '-');
+      }
+    }
+
+    async function refreshAll() {
+      setErr('');
+      if (!profileId) {
+        setErr('缺少 profile 参数（例如 /dashboard?profile=<id>）');
+        return;
+      }
+
+      setText('browserInfo', pretty({
+        userAgent: navigator.userAgent,
+        platform: navigator.platform,
+        language: navigator.language,
+        languages: navigator.languages,
+        webdriver: navigator.webdriver,
+        hardwareConcurrency: navigator.hardwareConcurrency,
+        deviceMemory: navigator.deviceMemory,
+        screen: { width: screen.width, height: screen.height, availWidth: screen.availWidth, availHeight: screen.availHeight, colorDepth: screen.colorDepth, pixelDepth: screen.pixelDepth },
+      }));
+
+      await Promise.all([refreshProfile(), refreshRuntime()]);
+      await Promise.all([refreshIp(), refreshNetinfo()]);
+    }
+
+    $('btnAll').onclick = () => refreshAll().catch(e => setErr(String(e && e.stack ? e.stack : e)));
+    $('btnIp').onclick = () => refreshIp().catch(e => setErr(String(e && e.stack ? e.stack : e)));
+    $('btnNet').onclick = () => refreshNetinfo().catch(e => setErr(String(e && e.stack ? e.stack : e)));
+
+    refreshAll().catch(e => setErr(String(e && e.stack ? e.stack : e)));
   </script>
 </body>
 </html>`;
@@ -364,7 +1047,7 @@ function startLocalApiServer() {
                 return _sendJson(res, 405, { success: false, error: 'Method Not Allowed' });
             }
 
-            const subMatch = path.match(/^\/profiles\/([^/]+)\/(runtime|ip)$/);
+            const subMatch = path.match(/^\/profiles\/([^/]+)\/(runtime|ip|netinfo)$/);
             if (subMatch) {
                 const profileId = subMatch[1];
                 const kind = subMatch[2];
@@ -384,42 +1067,122 @@ function startLocalApiServer() {
                         success: true,
                         data: {
                             running,
-                            ws,
-                            http: httpEndpoint,
-                            debugPort: running && proc && proc.remoteDebuggingEnabled ? (profile.debugPort || undefined) : undefined,
-                            localPort: running && proc ? (proc.localPort || undefined) : undefined,
-                        }
-                    });
-                }
+	                            ws,
+	                            http: httpEndpoint,
+	                            debugPort: running && proc && proc.remoteDebuggingEnabled ? (profile.debugPort || undefined) : undefined,
+	                            localPort: running && proc ? (proc.localPort || undefined) : undefined,
+	                            sshLocalPort: running && proc ? (proc.sshLocalPort || undefined) : undefined,
+	                        }
+	                    });
+	                }
 
                 if (!running || !proc || !proc.localPort) return _sendJson(res, 400, { success: false, error: 'Profile not running' });
 
                 const agent = new SocksProxyAgent(`socks5h://127.0.0.1:${proc.localPort}`);
-                const urls = [
-                    'https://api.ipify.org?format=text',
-                    'https://ifconfig.me/ip',
-                    'https://ipinfo.io/ip',
-                ];
 
-                for (const u of urls) {
-                    try {
-                        const text = await new Promise((resolve, reject) => {
-                            const mod = u.startsWith('https:') ? https : http;
-                            const r = mod.get(u, { agent, timeout: 8000, headers: { 'User-Agent': 'GeekEZ-Dashboard' } }, (resp) => {
-                                let buf = '';
-                                resp.setEncoding('utf8');
-                                resp.on('data', (c) => buf += c);
-                                resp.on('end', () => resolve(buf));
+                if (kind === 'ip') {
+                    const urls = [
+                        'https://api.ipify.org?format=text',
+                        'https://ifconfig.me/ip',
+                        'https://ipinfo.io/ip',
+                    ];
+
+                    for (const u of urls) {
+                        try {
+                            const text = await new Promise((resolve, reject) => {
+                                const mod = u.startsWith('https:') ? https : http;
+                                const r = mod.get(u, { agent, timeout: 8000, headers: { 'User-Agent': 'GeekEZ-Dashboard' } }, (resp) => {
+                                    let buf = '';
+                                    resp.setEncoding('utf8');
+                                    resp.on('data', (c) => buf += c);
+                                    resp.on('end', () => resolve(buf));
+                                });
+                                r.on('timeout', () => { r.destroy(new Error('timeout')); });
+                                r.on('error', reject);
                             });
-                            r.on('timeout', () => { r.destroy(new Error('timeout')); });
-                            r.on('error', reject);
-                        });
-                        const ip = String(text || '').trim();
-                        if (ip && ip.length <= 64) return _sendJson(res, 200, { success: true, data: { ip, source: u } });
-                    } catch (e) { }
+                            const ip = String(text || '').trim();
+                            if (ip && ip.length <= 64) return _sendJson(res, 200, { success: true, data: { ip, source: u } });
+                        } catch (e) { }
+                    }
+
+                    return _sendJson(res, 502, { success: false, error: 'IP fetch failed' });
                 }
 
-                return _sendJson(res, 502, { success: false, error: 'IP fetch failed' });
+                if (kind === 'netinfo') {
+                    const urls = [
+                        'https://ipwho.is/',
+                        'https://ipapi.co/json/',
+                        'https://ipinfo.io/json',
+                    ];
+
+                    const normalize = (u, obj) => {
+                        const data = obj && typeof obj === 'object' ? obj : {};
+                        const ip = String(data.ip || data.ip_address || '').trim();
+                        if (!ip) return null;
+
+                        let country = String(data.country_name || data.country || data.countryCode || '').trim();
+                        let region = String(data.region || data.region_name || '').trim();
+                        let city = String(data.city || '').trim();
+                        let timezone = '';
+                        if (data.timezone && typeof data.timezone === 'object') timezone = String(data.timezone.id || data.timezone.name || '').trim();
+                        else timezone = String(data.timezone || '').trim();
+
+                        let latitude = data.latitude ?? data.lat ?? data.latitude;
+                        let longitude = data.longitude ?? data.lon ?? data.longitude;
+                        if ((latitude === undefined || longitude === undefined) && typeof data.loc === 'string' && data.loc.includes(',')) {
+                            const [a, b] = data.loc.split(',');
+                            const la = Number.parseFloat(a);
+                            const lo = Number.parseFloat(b);
+                            if (Number.isFinite(la) && Number.isFinite(lo)) { latitude = la; longitude = lo; }
+                        }
+
+                        const postal = String(data.postal || data.zip || '').trim();
+                        const org = String((data.org || (data.connection && data.connection.isp) || '')).trim();
+                        const asn = String((data.asn || (data.connection && data.connection.asn) || '')).trim();
+
+                        if (u.includes('ipinfo.io')) {
+                            // ipinfo returns country as code like "US"
+                            if (country && country.length <= 3 && !data.country_name) country = country;
+                        }
+
+                        return {
+                            ip,
+                            country,
+                            region,
+                            city,
+                            timezone,
+                            latitude: (latitude === undefined || latitude === null) ? null : Number(latitude),
+                            longitude: (longitude === undefined || longitude === null) ? null : Number(longitude),
+                            postal,
+                            org,
+                            asn,
+                            source: u,
+                        };
+                    };
+
+                    for (const u of urls) {
+                        try {
+                            const text = await new Promise((resolve, reject) => {
+                                const mod = u.startsWith('https:') ? https : http;
+                                const r = mod.get(u, { agent, timeout: 8000, headers: { 'User-Agent': 'GeekEZ-Dashboard' } }, (resp) => {
+                                    let buf = '';
+                                    resp.setEncoding('utf8');
+                                    resp.on('data', (c) => buf += c);
+                                    resp.on('end', () => resolve(buf));
+                                });
+                                r.on('timeout', () => { r.destroy(new Error('timeout')); });
+                                r.on('error', reject);
+                            });
+                            const obj = JSON.parse(String(text || '').trim() || '{}');
+                            const out = normalize(u, obj);
+                            if (out && out.ip) return _sendJson(res, 200, { success: true, data: out });
+                        } catch (e) { }
+                    }
+
+                    return _sendJson(res, 502, { success: false, error: 'Netinfo fetch failed' });
+                }
+
+                return _sendJson(res, 404, { success: false, error: 'Not Found' });
             }
 
             const match = path.match(/^\/profiles\/([^/]+)(?:\/(open|close))?$/);
@@ -492,14 +1255,38 @@ app.whenReady().then(async () => {
 
 // IPC Handles
 ipcMain.handle('get-app-info', () => { return { name: app.getName(), version: app.getVersion() }; });
+ipcMain.handle('ssh-hostkey-prompt-result', (e, payload) => {
+    const requestId = payload && payload.requestId ? String(payload.requestId) : '';
+    const choice = payload && payload.choice ? String(payload.choice) : 'cancel';
+    const waiter = requestId ? sshHostKeyPromptWaiters.get(requestId) : null;
+    if (!waiter) return false;
+    sshHostKeyPromptWaiters.delete(requestId);
+    try { waiter.resolve(choice); } catch (e2) { }
+    return true;
+});
 ipcMain.handle('fetch-url', async (e, url) => { try { const res = await fetch(url); if (!res.ok) throw new Error('HTTP ' + res.status); return await res.text(); } catch (e) { throw e.message; } });
 ipcMain.handle('test-proxy-latency', async (e, proxyStr) => {
-    const tempPort = await getPort(); const tempConfigPath = path.join(app.getPath('userData'), `test_config_${tempPort}.json`);
+    const tempPort = await getPort();
+    const tempConfigPath = path.join(app.getPath('userData'), `test_config_${tempPort}.json`);
+    let sshInfo = null;
+    let xrayPid = null;
     try {
-        let outbound; try { const { parseProxyLink } = require('./utils'); outbound = parseProxyLink(proxyStr, "proxy_test"); } catch (err) { return { success: false, msg: "Format Err" }; }
+        let effective = String(proxyStr || '').trim();
+        if (effective.startsWith('ssh://')) {
+            const testDir = path.join(app.getPath('userData'), '_ssh_test');
+            fs.ensureDirSync(testDir);
+            sshInfo = await startSshDynamicProxy(effective, testDir);
+            effective = `socks5://127.0.0.1:${sshInfo.localPort}`;
+        }
+
+        let outbound;
+        try { const { parseProxyLink } = require('./utils'); outbound = parseProxyLink(effective, "proxy_test"); }
+        catch (err) { throw new Error("Format Err"); }
+
         const config = { log: { loglevel: "none" }, inbounds: [{ port: tempPort, listen: "127.0.0.1", protocol: "socks", settings: { udp: true } }], outbounds: [outbound, { protocol: "freedom", tag: "direct" }], routing: { rules: [{ type: "field", outboundTag: "proxy_test", port: "0-65535" }] } };
         await fs.writeJson(tempConfigPath, config);
         const xrayProcess = spawn(BIN_PATH, ['run', '-c', tempConfigPath], { cwd: BIN_DIR, env: { ...process.env, 'XRAY_LOCATION_ASSET': RESOURCES_BIN }, stdio: 'ignore', windowsHide: true });
+        xrayPid = xrayProcess.pid;
         await new Promise(r => setTimeout(r, 800));
         const start = Date.now(); const agent = new SocksProxyAgent(`socks5h://127.0.0.1:${tempPort}`);
         const result = await new Promise((resolve) => {
@@ -508,8 +1295,15 @@ ipcMain.handle('test-proxy-latency', async (e, proxyStr) => {
             });
             req.on('error', () => resolve({ success: false, msg: "Err" })); req.on('timeout', () => { req.destroy(); resolve({ success: false, msg: "Timeout" }); });
         });
-        await forceKill(xrayProcess.pid); try { fs.unlinkSync(tempConfigPath); } catch (e) { } return result;
-    } catch (err) { return { success: false, msg: err.message }; }
+        return result;
+    } catch (err) {
+        return { success: false, msg: err.message };
+    } finally {
+        if (xrayPid) await forceKill(xrayPid);
+        if (sshInfo && sshInfo.pid) await forceKill(sshInfo.pid);
+        if (sshInfo && sshInfo.logFd !== undefined) { try { fs.closeSync(sshInfo.logFd); } catch (e) { } }
+        try { fs.unlinkSync(tempConfigPath); } catch (e) { }
+    }
 });
 ipcMain.handle('set-title-bar-color', (e, colors) => { const win = BrowserWindow.fromWebContents(e.sender); if (win) { if (process.platform === 'win32') try { win.setTitleBarOverlay({ color: colors.bg, symbolColor: colors.symbol }); } catch (e) { } win.setBackgroundColor(colors.bg); } });
 ipcMain.handle('check-app-update', async () => { try { const data = await fetchJson('https://api.github.com/repos/EchoHS/GeekezBrowser/releases/latest'); if (!data || !data.tag_name) return { update: false }; const remote = data.tag_name.replace('v', ''); if (compareVersions(remote, app.getVersion()) > 0) { return { update: true, remote, url: data.html_url }; } return { update: false }; } catch (e) { return { update: false, error: e.message }; } });
@@ -635,6 +1429,7 @@ async function closeProfileInternal(id, sender) {
     delete activeProcesses[id];
 
     await forceKill(proc.xrayPid);
+    await forceKill(proc.sshPid);
     try {
         await proc.browser.close();
     } catch (e) { }
@@ -647,6 +1442,11 @@ async function closeProfileInternal(id, sender) {
         } catch (e) {
             console.error('Failed to close log fd:', e.message);
         }
+    }
+    if (proc.sshLogFd !== undefined) {
+        try {
+            fs.closeSync(proc.sshLogFd);
+        } catch (e) { }
     }
     // Windows 需要更长的等待时间让文件释放
     await new Promise(r => setTimeout(r, 1000));
@@ -826,19 +1626,23 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
     const shouldUsePreProxy = override === 'on' || (override === 'default' && settings.enablePreProxy);
     let finalPreProxyConfig = null;
     let switchMsg = null;
-    if (shouldUsePreProxy && settings.preProxies && settings.preProxies.length > 0) {
-        const active = settings.preProxies.filter(p => p.enable !== false);
-        if (active.length > 0) {
-            if (settings.mode === 'single') { const target = active.find(p => p.id === settings.selectedId) || active[0]; finalPreProxyConfig = { preProxies: [target] }; }
-            else if (settings.mode === 'balance') { const target = active[Math.floor(Math.random() * active.length)]; finalPreProxyConfig = { preProxies: [target] }; if (settings.notify) switchMsg = `Balance: [${target.remark}]`; }
-            else if (settings.mode === 'failover') { const target = active[0]; finalPreProxyConfig = { preProxies: [target] }; if (settings.notify) switchMsg = `Failover: [${target.remark}]`; }
-        }
-    }
+	    if (shouldUsePreProxy && settings.preProxies && settings.preProxies.length > 0) {
+	        const active = settings.preProxies.filter(p => p.enable !== false);
+	        if (active.length > 0) {
+	            if (settings.mode === 'single') { const target = active.find(p => p.id === settings.selectedId) || active[0]; finalPreProxyConfig = { preProxies: [target] }; }
+	            else if (settings.mode === 'balance') { const target = active[Math.floor(Math.random() * active.length)]; finalPreProxyConfig = { preProxies: [target] }; if (settings.notify) switchMsg = `Balance: [${target.remark}]`; }
+	            else if (settings.mode === 'failover') { const target = active[0]; finalPreProxyConfig = { preProxies: [target] }; if (settings.notify) switchMsg = `Failover: [${target.remark}]`; }
+	        }
+	    }
 
-    try {
-        const localPort = await getPort();
-        const profileDir = path.join(DATA_PATH, profileId);
-        const userDataDir = path.join(profileDir, 'browser_data');
+	    let sshInfo = null;
+	    let xrayProcess = null;
+	    let logFd = undefined;
+
+	    try {
+	        const localPort = await getPort();
+	        const profileDir = path.join(DATA_PATH, profileId);
+	        const userDataDir = path.join(profileDir, 'browser_data');
         const xrayConfigPath = path.join(profileDir, 'config.json');
         const xrayLogPath = path.join(profileDir, 'xray_run.log');
         fs.ensureDirSync(userDataDir);
@@ -859,10 +1663,16 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
             await fs.writeJson(preferencesPath, preferences);
         } catch (e) { }
 
-        const config = generateXrayConfig(profile.proxyStr, localPort, finalPreProxyConfig);
+        let mainProxyStr = String(profile.proxyStr || '').trim();
+        if (mainProxyStr.startsWith('ssh://')) {
+            sshInfo = await startSshDynamicProxy(mainProxyStr, profileDir);
+            mainProxyStr = `socks5://127.0.0.1:${sshInfo.localPort}`;
+        }
+
+        const config = generateXrayConfig(mainProxyStr, localPort, finalPreProxyConfig);
         fs.writeJsonSync(xrayConfigPath, config);
-        const logFd = fs.openSync(xrayLogPath, 'a');
-        const xrayProcess = spawn(BIN_PATH, ['run', '-c', xrayConfigPath], { cwd: BIN_DIR, env: { ...process.env, 'XRAY_LOCATION_ASSET': RESOURCES_BIN }, stdio: ['ignore', logFd, logFd], windowsHide: true });
+        logFd = fs.openSync(xrayLogPath, 'a');
+        xrayProcess = spawn(BIN_PATH, ['run', '-c', xrayConfigPath], { cwd: BIN_DIR, env: { ...process.env, 'XRAY_LOCATION_ASSET': RESOURCES_BIN }, stdio: ['ignore', logFd, logFd], windowsHide: true });
 
         // 优化：减少等待时间，Xray 通常 300ms 内就能启动
         await new Promise(resolve => setTimeout(resolve, 300));
@@ -891,14 +1701,15 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
 
         // 4. 构建启动参数（性能优化）
 
-        const launchArgs = [
-            `--proxy-server=socks5://127.0.0.1:${localPort}`,
-            '--proxy-bypass-list=127.0.0.1;localhost;[::1]',
-            `--user-data-dir=${userDataDir}`,
-            `--window-size=${profile.fingerprint?.window?.width || 1280},${profile.fingerprint?.window?.height || 800}`,
-            '--restore-last-session',
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
+	        const launchArgs = [
+	            `--proxy-server=socks5://127.0.0.1:${localPort}`,
+	            '--proxy-bypass-list=127.0.0.1;localhost;[::1]',
+	            '--disable-quic',
+	            `--user-data-dir=${userDataDir}`,
+	            `--window-size=${profile.fingerprint?.window?.width || 1280},${profile.fingerprint?.window?.height || 800}`,
+	            '--restore-last-session',
+	            '--no-sandbox',
+	            '--disable-setuid-sandbox',
             '--disable-blink-features=AutomationControlled',
             '--disable-features=IsolateOrigins,site-per-process',
             '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
@@ -962,9 +1773,12 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
 
         activeProcesses[profileId] = {
             xrayPid: xrayProcess.pid,
+            sshPid: sshInfo ? sshInfo.pid : undefined,
             browser,
             logFd: logFd,  // 存储日志文件描述符，用于后续关闭
+            sshLogFd: sshInfo ? sshInfo.logFd : undefined,
             localPort,
+            sshLocalPort: sshInfo ? sshInfo.localPort : undefined,
             remoteDebuggingEnabled
         };
         if (sender && !sender.isDestroyed()) sender.send('profile-status', { id: profileId, status: 'running' });
@@ -985,7 +1799,9 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
         browser.on('disconnected', async () => {
             if (activeProcesses[profileId]) {
                 const pid = activeProcesses[profileId].xrayPid;
+                const sshPid = activeProcesses[profileId].sshPid;
                 const logFd = activeProcesses[profileId].logFd;
+                const sshLogFd = activeProcesses[profileId].sshLogFd;
 
                 // 关闭日志文件描述符
                 if (logFd !== undefined) {
@@ -993,9 +1809,15 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
                         fs.closeSync(logFd);
                     } catch (e) { }
                 }
+                if (sshLogFd !== undefined) {
+                    try {
+                        fs.closeSync(sshLogFd);
+                    } catch (e) { }
+                }
 
                 delete activeProcesses[profileId];
                 await forceKill(pid);
+                await forceKill(sshPid);
 
                 // 性能优化：清理缓存文件，节省磁盘空间
                 try {
@@ -1022,10 +1844,16 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
             debugPort: remoteDebuggingEnabled ? (profile.debugPort || undefined) : undefined,
             message: switchMsg
         };
-    } catch (err) {
-        console.error(err);
-        throw err;
-    }
+	    } catch (err) {
+	        if (!activeProcesses[profileId]) {
+	            if (xrayProcess && xrayProcess.pid) await forceKill(xrayProcess.pid);
+	            if (sshInfo && sshInfo.pid) await forceKill(sshInfo.pid);
+	            if (logFd !== undefined) { try { fs.closeSync(logFd); } catch (e) { } }
+	            if (sshInfo && sshInfo.logFd !== undefined) { try { fs.closeSync(sshInfo.logFd); } catch (e) { } }
+	        }
+	        console.error(err);
+	        throw err;
+	    }
 }
 
 ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
@@ -1034,7 +1862,7 @@ ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
 });
 
 app.on('window-all-closed', () => {
-    Object.values(activeProcesses).forEach(p => forceKill(p.xrayPid));
+    Object.values(activeProcesses).forEach(p => { forceKill(p.xrayPid); forceKill(p.sshPid); });
     if (process.platform !== 'darwin') app.quit();
 });
 // Helpers (Same)

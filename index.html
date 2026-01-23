@@ -514,6 +514,36 @@
             text-align: center;
         }
 
+        #sshHostKeyModal .modal-content {
+            width: 620px;
+        }
+
+        #sshHostKeyModal .ssh-kv {
+            display: grid;
+            grid-template-columns: 110px 1fr;
+            gap: 6px 12px;
+            font-size: 12px;
+        }
+
+        #sshHostKeyModal .ssh-k {
+            color: var(--text-secondary);
+        }
+
+        #sshHostKeyModal .ssh-v {
+            word-break: break-all;
+        }
+
+        #sshHostKeyModal .ssh-raw {
+            margin-top: 8px;
+            padding: 10px;
+            border-radius: 6px;
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid var(--border);
+            font-size: 11px;
+            white-space: pre-wrap;
+            user-select: text;
+        }
+
         .modal-header {
             display: flex;
             justify-content: space-between;
@@ -1412,6 +1442,42 @@
                 spellcheck="false"></textarea>
             <div style="text-align:right; margin-top:10px;"><button onclick="submitInputModal()"
                     data-i18n="done">OK</button></div>
+        </div>
+    </div>
+
+    <div id="sshHostKeyModal" class="modal-overlay" style="z-index: 2200;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span id="sshHostKeyTitle">SSH Host Key</span>
+                <span style="cursor:pointer" onclick="closeSshHostKeyModal('cancel')">✕</span>
+            </div>
+            <div class="modal-body">
+                <div id="sshHostKeyMessage"
+                    style="font-size:12px; line-height:1.5; color:var(--text-secondary); margin-bottom:12px;"></div>
+
+                <div class="ssh-kv">
+                    <div class="ssh-k">Host</div>
+                    <div class="ssh-v" id="sshHostKeyHost">-</div>
+                    <div class="ssh-k">Port</div>
+                    <div class="ssh-v" id="sshHostKeyPort">-</div>
+                    <div class="ssh-k">Fingerprint</div>
+                    <div class="ssh-v" id="sshHostKeyFingerprint">-</div>
+                </div>
+
+                <div style="display:flex; gap:10px; margin-top:12px; justify-content:flex-end;">
+                    <button id="sshHostKeyBtnCopy" class="outline" onclick="copySshHostKeyFingerprint()">Copy Fingerprint</button>
+                </div>
+
+                <div id="sshHostKeyRawWrap" style="display:none;">
+                    <div style="margin-top:10px; font-size:12px; color:var(--text-secondary);">Details</div>
+                    <div class="ssh-raw" id="sshHostKeyRaw"></div>
+                </div>
+            </div>
+            <div class="modal-footer" style="display:flex; justify-content:flex-end; gap:10px;">
+                <button id="sshHostKeyBtnCancel" class="outline" onclick="closeSshHostKeyModal('cancel')">Cancel</button>
+                <button id="sshHostKeyBtnOnce" class="outline" onclick="closeSshHostKeyModal('n')">Continue Once (n)</button>
+                <button id="sshHostKeyBtnYes" onclick="closeSshHostKeyModal('y')">Trust & Continue (y)</button>
+            </div>
         </div>
     </div>
 
