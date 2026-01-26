@@ -14,5 +14,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 通用 invoke，用于 open-url 等
     invoke: (channel, data) => ipcRenderer.invoke(channel, data),
     getRunningIds: () => ipcRenderer.invoke('get-running-ids'),
-    onProfileStatus: (callback) => ipcRenderer.on('profile-status', (event, data) => callback(data))
+    onProfileStatus: (callback) => ipcRenderer.on('profile-status', (event, data) => callback(data)),
+    // API events
+    onRefreshProfiles: (callback) => ipcRenderer.on('refresh-profiles', () => callback()),
+    onApiLaunchProfile: (callback) => ipcRenderer.on('api-launch-profile', (event, id) => callback(id))
 });

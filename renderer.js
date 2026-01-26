@@ -334,6 +334,17 @@ async function init() {
         if (badge) status === 'running' ? badge.classList.add('active') : badge.classList.remove('active');
     });
 
+    // API event listeners for remote refresh and launch
+    window.electronAPI.onRefreshProfiles(() => {
+        console.log('API triggered profile refresh');
+        loadProfiles();
+    });
+
+    window.electronAPI.onApiLaunchProfile((id) => {
+        console.log('API triggered launch for:', id);
+        launch(id);
+    });
+
     // 核心修复：版本号注入
     const info = await window.electronAPI.invoke('get-app-info');
     const verSpan = document.getElementById('app-version');
@@ -671,6 +682,15 @@ async function openEditModal(id) {
         debugPortSection.style.display = 'none';
     }
 
+    // Load custom args and show/hide based on global setting
+    const customArgsSection = document.getElementById('customArgsSection');
+    if (settings.enableCustomArgs) {
+        customArgsSection.style.display = 'block';
+        document.getElementById('editCustomArgs').value = p.customArgs || '';
+    } else {
+        customArgsSection.style.display = 'none';
+    }
+
     document.getElementById('editModal').style.display = 'flex';
 }
 function closeEditModal() { document.getElementById('editModal').style.display = 'none'; currentEditId = null; }
@@ -716,6 +736,12 @@ async function saveEditProfile() {
         if (debugPortInput.parentElement.style.display !== 'none') {
             const portValue = debugPortInput.value.trim();
             p.debugPort = portValue ? parseInt(portValue) : null;
+        }
+
+        // Save custom args if enabled
+        const customArgsInput = document.getElementById('editCustomArgs');
+        if (customArgsInput.parentElement.style.display !== 'none') {
+            p.customArgs = customArgsInput.value.trim();
         }
 
         console.log('[saveEditProfile] Calling updateProfile...');
@@ -1369,6 +1395,8 @@ function openSettings() {
     loadUserExtensions();
     loadWatermarkStyle();
     loadRemoteDebuggingSetting();
+    loadCustomArgsSetting();
+    loadApiServerSetting();
     loadDataPathSetting();
 }
 function closeSettings() {
@@ -1459,12 +1487,154 @@ async function saveRemoteDebuggingSetting(enabled) {
     showAlert(enabled ? '远程调试已启用，编辑环境时可设置端口' : '远程调试已禁用');
 }
 
+// Unified toggle handler for developer features
+function handleDevToggle(checkbox) {
+    const toggleSwitch = checkbox.closest('.toggle-switch');
+    const track = toggleSwitch?.querySelector('.toggle-track');
+    const knob = toggleSwitch?.querySelector('.toggle-knob');
+
+    // Animate toggle - update track color and knob position
+    if (track) {
+        track.style.background = checkbox.checked ? 'var(--accent)' : 'var(--border)';
+    }
+    if (knob) {
+        knob.style.left = checkbox.checked ? '22px' : '2px';
+    }
+
+    // Call appropriate save function based on checkbox id
+    if (checkbox.id === 'enableRemoteDebugging') {
+        saveRemoteDebuggingSetting(checkbox.checked);
+    } else if (checkbox.id === 'enableCustomArgs') {
+        saveCustomArgsSetting(checkbox.checked);
+    } else if (checkbox.id === 'enableApiServer') {
+        saveApiServerSetting(checkbox.checked);
+    }
+}
+
+// Update toggle visual state (for loading saved state)
+function updateToggleVisual(checkbox) {
+    const toggleSwitch = checkbox.closest('.toggle-switch');
+    const track = toggleSwitch?.querySelector('.toggle-track');
+    const knob = toggleSwitch?.querySelector('.toggle-knob');
+
+    if (track) {
+        track.style.background = checkbox.checked ? 'var(--accent)' : 'var(--border)';
+    }
+    if (knob) {
+        knob.style.left = checkbox.checked ? '22px' : '2px';
+    }
+}
+
 async function loadRemoteDebuggingSetting() {
     const settings = await window.electronAPI.getSettings();
     const checkbox = document.getElementById('enableRemoteDebugging');
     if (checkbox) {
         checkbox.checked = settings.enableRemoteDebugging || false;
+        updateToggleVisual(checkbox);
     }
+}
+
+// Custom Args Settings
+async function saveCustomArgsSetting(enabled) {
+    const settings = await window.electronAPI.getSettings();
+    settings.enableCustomArgs = enabled;
+    await window.electronAPI.saveSettings(settings);
+    showAlert(enabled ? t('customArgsEnabled') || '自定义启动参数已启用' : t('customArgsDisabled') || '自定义启动参数已禁用');
+}
+
+async function loadCustomArgsSetting() {
+    const settings = await window.electronAPI.getSettings();
+    const checkbox = document.getElementById('enableCustomArgs');
+    if (checkbox) {
+        checkbox.checked = settings.enableCustomArgs || false;
+        updateToggleVisual(checkbox);
+    }
+}
+
+// API Server Settings
+async function saveApiServerSetting(enabled) {
+    const settings = await window.electronAPI.getSettings();
+    settings.enableApiServer = enabled;
+    await window.electronAPI.saveSettings(settings);
+
+    // Show/hide port section
+    document.getElementById('apiPortSection').style.display = enabled ? 'block' : 'none';
+
+    if (enabled) {
+        // Start API server
+        const port = settings.apiPort || 12138;
+        const result = await window.electronAPI.invoke('start-api-server', { port });
+        if (result.success) {
+            document.getElementById('apiStatus').style.display = 'inline-block';
+            showAlert(`${t('apiStarted') || 'API 服务已启动'}: http://localhost:${port}`);
+        } else {
+            showAlert((t('apiError') || 'API 启动失败: ') + result.error);
+        }
+    } else {
+        // Stop API server
+        await window.electronAPI.invoke('stop-api-server');
+        document.getElementById('apiStatus').style.display = 'none';
+        showAlert(t('apiStopped') || 'API 服务已停止');
+    }
+}
+
+async function saveApiPort() {
+    const port = parseInt(document.getElementById('apiPortInput').value) || 12138;
+    if (port < 1024 || port > 65535) {
+        showAlert(t('apiPortInvalid') || '端口号必须在 1024-65535 之间');
+        return;
+    }
+
+    const settings = await window.electronAPI.getSettings();
+    settings.apiPort = port;
+    await window.electronAPI.saveSettings(settings);
+    document.getElementById('apiPortDisplay').textContent = port;
+
+    // Restart API server if enabled
+    if (settings.enableApiServer) {
+        await window.electronAPI.invoke('stop-api-server');
+        const result = await window.electronAPI.invoke('start-api-server', { port });
+        if (result.success) {
+            showAlert(`${t('apiRestarted') || 'API 服务已重启'}: http://localhost:${port}`);
+        }
+    } else {
+        showAlert(t('apiPortSaved') || 'API 端口已保存');
+    }
+}
+
+async function loadApiServerSetting() {
+    const settings = await window.electronAPI.getSettings();
+    const checkbox = document.getElementById('enableApiServer');
+    const portInput = document.getElementById('apiPortInput');
+    const portDisplay = document.getElementById('apiPortDisplay');
+    const portSection = document.getElementById('apiPortSection');
+    const apiStatus = document.getElementById('apiStatus');
+
+    if (checkbox) {
+        checkbox.checked = settings.enableApiServer || false;
+        updateToggleVisual(checkbox);
+    }
+    if (portInput) {
+        portInput.value = settings.apiPort || 12138;
+    }
+    if (portDisplay) {
+        portDisplay.textContent = settings.apiPort || 12138;
+    }
+    if (portSection) {
+        portSection.style.display = settings.enableApiServer ? 'block' : 'none';
+    }
+
+    // Check if API is running
+    try {
+        const status = await window.electronAPI.invoke('get-api-status');
+        if (apiStatus) {
+            apiStatus.style.display = status.running ? 'inline-block' : 'none';
+        }
+    } catch (e) { }
+}
+
+function openApiDocs() {
+    window.electronAPI.invoke('open-url', 'https://github.com/EchoHS/GeekezBrowser/blob/main/docs/API.md');
 }
 
 function switchSettingsTab(tabName) {

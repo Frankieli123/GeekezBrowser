@@ -140,5 +140,36 @@ window.zhCN = {
     dataPathSuccess: "数据目录已更改，请重启应用",
     dataPathError: "操作失败: ",
     dataPathConfirmReset: "确定要恢复默认数据目录吗？\n\n注意：这不会迁移自定义目录中的数据。",
-    dataPathResetSuccess: "已恢复默认目录，请重启应用"
+    dataPathResetSuccess: "已恢复默认目录，请重启应用",
+    // 自定义启动参数
+    customArgsTitle: "⚡ 自定义启动参数",
+    customArgsDesc: "为每个环境启用自定义 Chrome 启动参数（如 --start-maximized）",
+    customArgsEnable: "启用自定义启动参数",
+    customArgsEnableDesc: "启用后，可以为每个环境指定自定义 Chrome 参数",
+    customArgsEnabled: "自定义启动参数已启用",
+    customArgsDisabled: "自定义启动参数已禁用",
+    customArgsLabel: "自定义启动参数",
+    customArgsHint: "每行一个参数或空格分隔。示例：--start-maximized",
+    // API 服务
+    apiTitle: "🔌 API 服务",
+    apiDesc: "启用 REST API 以便外部管理环境（创建、启动、编辑、删除）",
+    apiEnable: "启用 API 服务",
+    apiEnableDesc: "启动 HTTP 服务器以提供 REST API 访问",
+    apiPort: "API 端口:",
+    apiRunning: "运行中",
+    apiDocs: "📄 查看 API 文档",
+    apiStarted: "API 服务已启动",
+    apiStopped: "API 服务已停止",
+    apiRestarted: "API 服务已重启",
+    apiError: "API 启动失败: ",
+    apiPortInvalid: "端口号必须在 1024-65535 之间",
+    apiPortSaved: "API 端口已保存",
+    // 开发者功能
+    devFeaturesTitle: "开发者选项",
+    debugToggle: "🔧 远程调试",
+    debugToggleHint: "启用后可为环境设置远程调试端口，用于 Puppeteer 或 DevTools 连接",
+    argsToggle: "⚡ 自定义启动参数",
+    argsToggleHint: "启用后可为每个环境添加自定义 Chrome 启动参数",
+    apiToggle: "🔌 API 服务",
+    apiToggleHint: "启用后可通过 REST API 远程管理环境"
 };

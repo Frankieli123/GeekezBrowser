@@ -138,7 +138,38 @@ const enTranslations = {
     dataPathSuccess: "Data directory changed, please restart the app",
     dataPathError: "Operation failed: ",
     dataPathConfirmReset: "Reset to default data directory?\n\nNote: This will not migrate data from custom directory.",
-    dataPathResetSuccess: "Restored to default, please restart the app"
+    dataPathResetSuccess: "Restored to default, please restart the app",
+    // Custom Launch Args
+    customArgsTitle: "⚡ Custom Launch Arguments",
+    customArgsDesc: "Enable custom Chrome launch arguments for each profile (e.g., --start-maximized)",
+    customArgsEnable: "Enable Custom Launch Arguments",
+    customArgsEnableDesc: "When enabled, you can specify custom Chrome flags for each profile",
+    customArgsEnabled: "Custom launch arguments enabled",
+    customArgsDisabled: "Custom launch arguments disabled",
+    customArgsLabel: "Custom Launch Arguments",
+    customArgsHint: "One argument per line or space-separated. Example: --start-maximized",
+    // API Server
+    apiTitle: "🔌 API Server",
+    apiDesc: "Enable REST API for external profile management (create, launch, edit, delete profiles)",
+    apiEnable: "Enable API Server",
+    apiEnableDesc: "Start HTTP server for REST API access",
+    apiPort: "API Port:",
+    apiRunning: "Running",
+    apiDocs: "📄 View API Docs",
+    apiStarted: "API server started",
+    apiStopped: "API server stopped",
+    apiRestarted: "API server restarted",
+    apiError: "API start failed: ",
+    apiPortInvalid: "Port must be between 1024-65535",
+    apiPortSaved: "API port saved",
+    // Developer Features
+    devFeaturesTitle: "DEVELOPER FEATURES",
+    debugToggle: "🔧 Remote Debugging",
+    debugToggleHint: "Enable remote debugging port for Puppeteer or DevTools connection",
+    argsToggle: "⚡ Custom Launch Args",
+    argsToggleHint: "Add custom Chrome launch arguments for each profile",
+    apiToggle: "🔌 API Server",
+    apiToggleHint: "Enable REST API for remote profile management"
 };
 
 // Global i18n Manager

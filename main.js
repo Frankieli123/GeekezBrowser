@@ -61,6 +61,332 @@ fs.ensureDirSync(DATA_PATH);
 fs.ensureDirSync(TRASH_PATH);
 
 let activeProcesses = {};
+let apiServer = null;
+let apiServerRunning = false;
+let mainWindow = null; // Global reference for API-to-UI communication
+
+// ============================================================================
+// REST API Server
+// ============================================================================
+function createApiServer(port) {
+    const server = http.createServer(async (req, res) => {
+        // CORS headers
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        res.setHeader('Content-Type', 'application/json');
+
+        if (req.method === 'OPTIONS') {
+            res.writeHead(200);
+            res.end();
+            return;
+        }
+
+        const url = new URL(req.url, `http://localhost:${port}`);
+        const pathname = url.pathname;
+        const method = req.method;
+
+        // Parse body for POST/PUT
+        let body = '';
+        if (method === 'POST' || method === 'PUT') {
+            body = await new Promise(resolve => {
+                let data = '';
+                req.on('data', chunk => data += chunk);
+                req.on('end', () => resolve(data));
+            });
+        }
+
+        try {
+            const result = await handleApiRequest(method, pathname, body, url.searchParams);
+            res.writeHead(result.status || 200);
+            res.end(JSON.stringify(result.data || result));
+        } catch (err) {
+            console.error('API Error:', err);
+            res.writeHead(500);
+            res.end(JSON.stringify({ success: false, error: err.message }));
+        }
+    });
+
+    return server;
+}
+
+async function handleApiRequest(method, pathname, body, params) {
+    let profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+    const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : {};
+
+    // Helper: Find profile by ID or Name
+    const findProfile = (idOrName) => {
+        return profiles.find(p => p.id === idOrName || p.name === idOrName);
+    };
+
+    // Helper: Generate unique name
+    const generateUniqueName = (baseName) => {
+        if (!profiles.find(p => p.name === baseName)) return baseName;
+        let suffix = 2;
+        while (profiles.find(p => p.name === `${baseName}-${String(suffix).padStart(2, '0')}`)) {
+            suffix++;
+        }
+        return `${baseName}-${String(suffix).padStart(2, '0')}`;
+    };
+
+    // GET /api/status
+    if (method === 'GET' && pathname === '/api/status') {
+        return { success: true, running: Object.keys(activeProcesses), count: Object.keys(activeProcesses).length };
+    }
+
+    // GET /api/profiles
+    if (method === 'GET' && pathname === '/api/profiles') {
+        return { success: true, profiles: profiles.map(p => ({ id: p.id, name: p.name, tags: p.tags, running: !!activeProcesses[p.id] })) };
+    }
+
+    // GET /api/profiles/:idOrName
+    const profileMatch = pathname.match(/^\/api\/profiles\/([^\/]+)$/);
+    if (method === 'GET' && profileMatch) {
+        const profile = findProfile(decodeURIComponent(profileMatch[1]));
+        if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
+        return { success: true, profile: { ...profile, running: !!activeProcesses[profile.id] } };
+    }
+
+    // POST /api/profiles - Create with unique name
+    if (method === 'POST' && pathname === '/api/profiles') {
+        const data = JSON.parse(body);
+        const id = uuidv4();
+        const fingerprint = await generateFingerprint({});
+        const baseName = data.name || `Profile-${Date.now()}`;
+        const uniqueName = generateUniqueName(baseName);
+        const newProfile = {
+            id,
+            name: uniqueName,
+            proxyStr: data.proxyStr || '',
+            tags: data.tags || [],
+            fingerprint,
+            createdAt: Date.now()
+        };
+        profiles.push(newProfile);
+        await fs.writeJson(PROFILES_FILE, profiles);
+        notifyUIRefresh(); // Notify UI to refresh
+        return { success: true, profile: newProfile };
+    }
+
+    // PUT /api/profiles/:idOrName - Edit
+    if (method === 'PUT' && profileMatch) {
+        const profile = findProfile(decodeURIComponent(profileMatch[1]));
+        if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
+        const idx = profiles.findIndex(p => p.id === profile.id);
+        const data = JSON.parse(body);
+        // If name changed, ensure uniqueness
+        if (data.name && data.name !== profile.name) {
+            data.name = generateUniqueName(data.name);
+        }
+        profiles[idx] = { ...profiles[idx], ...data };
+        await fs.writeJson(PROFILES_FILE, profiles);
+        return { success: true, profile: profiles[idx] };
+    }
+
+    // DELETE /api/profiles/:idOrName
+    if (method === 'DELETE' && profileMatch) {
+        const profile = findProfile(decodeURIComponent(profileMatch[1]));
+        if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
+        profiles = profiles.filter(p => p.id !== profile.id);
+        await fs.writeJson(PROFILES_FILE, profiles);
+        notifyUIRefresh(); // Notify UI to refresh
+        return { success: true, message: 'Profile deleted' };
+    }
+
+    // GET /api/open/:idOrName - Launch profile
+    const openMatch = pathname.match(/^\/api\/open\/([^\/]+)$/);
+    if (method === 'GET' && openMatch) {
+        const profile = findProfile(decodeURIComponent(openMatch[1]));
+        if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
+        if (activeProcesses[profile.id]) return { success: true, message: 'Already running', profileId: profile.id };
+        // Trigger launch via IPC to main window
+        if (mainWindow && mainWindow.webContents) {
+            mainWindow.webContents.send('api-launch-profile', profile.id);
+        }
+        return { success: true, message: 'Launch requested', profileId: profile.id, name: profile.name };
+    }
+
+    // POST /api/profiles/:idOrName/stop - Stop profile
+    const stopMatch = pathname.match(/^\/api\/profiles\/([^\/]+)\/stop$/);
+    if (method === 'POST' && stopMatch) {
+        const profile = findProfile(decodeURIComponent(stopMatch[1]));
+        if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
+        const proc = activeProcesses[profile.id];
+        if (!proc) return { status: 404, data: { success: false, error: 'Profile not running' } };
+        await forceKill(proc.xrayPid);
+        await forceKill(proc.chromePid);
+        delete activeProcesses[profile.id];
+        return { success: true, message: 'Profile stopped' };
+    }
+
+    // GET /api/export/all?password=xxx - Export full backup
+    if (method === 'GET' && pathname === '/api/export/all') {
+        const password = params.get('password');
+        if (!password) return { status: 400, data: { success: false, error: 'Password required. Use ?password=yourpassword' } };
+
+        // Build backup data
+        const backupData = {
+            version: 1,
+            createdAt: Date.now(),
+            profiles: profiles.map(p => ({ ...p, fingerprint: cleanFingerprint ? cleanFingerprint(p.fingerprint) : p.fingerprint })),
+            preProxies: settings.preProxies || [],
+            subscriptions: settings.subscriptions || [],
+            browserData: {}
+        };
+
+        // Collect browser data
+        for (const profile of profiles) {
+            const profileDataDir = path.join(DATA_PATH, profile.id, 'browser_data');
+            if (fs.existsSync(profileDataDir)) {
+                const defaultDir = path.join(profileDataDir, 'Default');
+                if (fs.existsSync(defaultDir)) {
+                    const browserFiles = {};
+                    const filesToBackup = ['Bookmarks', 'Cookies', 'Login Data', 'Web Data', 'Preferences'];
+                    for (const fileName of filesToBackup) {
+                        const filePath = path.join(defaultDir, fileName);
+                        if (fs.existsSync(filePath)) {
+                            try {
+                                const content = await fs.readFile(filePath);
+                                browserFiles[fileName] = content.toString('base64');
+                            } catch (err) { }
+                        }
+                    }
+                    if (Object.keys(browserFiles).length > 0) {
+                        backupData.browserData[profile.id] = browserFiles;
+                    }
+                }
+            }
+        }
+
+        // Compress and encrypt
+        const jsonStr = JSON.stringify(backupData);
+        const compressed = await gzip(Buffer.from(jsonStr, 'utf8'));
+        const encrypted = encryptData(compressed, password);
+
+        return {
+            success: true,
+            data: encrypted.toString('base64'),
+            filename: `GeekEZ_FullBackup_${Date.now()}.geekez`,
+            profileCount: profiles.length
+        };
+    }
+
+    // GET /api/export/fingerprint - Export YAML fingerprints
+    if (method === 'GET' && pathname === '/api/export/fingerprint') {
+        const exportData = profiles.map(p => ({
+            id: p.id,
+            name: p.name,
+            proxyStr: p.proxyStr,
+            tags: p.tags,
+            fingerprint: cleanFingerprint ? cleanFingerprint(p.fingerprint) : p.fingerprint
+        }));
+        const yamlStr = yaml.dump(exportData, { lineWidth: -1, noRefs: true });
+        return {
+            success: true,
+            data: yamlStr,
+            filename: `GeekEZ_Profiles_${Date.now()}.yaml`,
+            profileCount: profiles.length
+        };
+    }
+
+    // POST /api/import - Import backup (YAML or encrypted)
+    if (method === 'POST' && pathname === '/api/import') {
+        try {
+            const data = JSON.parse(body);
+            const content = data.content;
+            const password = data.password;
+
+            if (!content) return { status: 400, data: { success: false, error: 'Content required' } };
+
+            // Try YAML first
+            try {
+                const yamlData = yaml.load(content);
+                if (Array.isArray(yamlData)) {
+                    let imported = 0;
+                    for (const item of yamlData) {
+                        const name = generateUniqueName(item.name || `Imported-${Date.now()}`);
+                        const newProfile = {
+                            id: uuidv4(),
+                            name,
+                            proxyStr: item.proxyStr || '',
+                            tags: item.tags || [],
+                            fingerprint: item.fingerprint || await generateFingerprint({}),
+                            createdAt: Date.now()
+                        };
+                        profiles.push(newProfile);
+                        imported++;
+                    }
+                    await fs.writeJson(PROFILES_FILE, profiles);
+                    notifyUIRefresh(); // Notify UI to refresh
+                    return { success: true, message: `Imported ${imported} profiles from YAML`, count: imported };
+                }
+            } catch (yamlErr) { }
+
+            // Try encrypted backup
+            if (!password) return { status: 400, data: { success: false, error: 'Password required for encrypted backup' } };
+
+            try {
+                const encrypted = Buffer.from(content, 'base64');
+                const decrypted = decryptData(encrypted, password);
+                const decompressed = await gunzip(decrypted);
+                const backupData = JSON.parse(decompressed.toString('utf8'));
+
+                let imported = 0;
+                for (const profile of backupData.profiles || []) {
+                    const name = generateUniqueName(profile.name);
+                    const newProfile = { ...profile, id: uuidv4(), name };
+                    profiles.push(newProfile);
+                    imported++;
+                }
+                await fs.writeJson(PROFILES_FILE, profiles);
+                notifyUIRefresh(); // Notify UI to refresh
+                return { success: true, message: `Imported ${imported} profiles from backup`, count: imported };
+            } catch (decryptErr) {
+                return { status: 400, data: { success: false, error: 'Invalid password or corrupted backup' } };
+            }
+        } catch (err) {
+            return { status: 400, data: { success: false, error: err.message } };
+        }
+    }
+
+    return { status: 404, data: { success: false, error: 'Endpoint not found' } };
+}
+
+// API Server IPC handlers
+ipcMain.handle('start-api-server', async (e, { port }) => {
+    if (apiServerRunning) {
+        return { success: false, error: 'API server already running' };
+    }
+    try {
+        apiServer = createApiServer(port);
+        await new Promise((resolve, reject) => {
+            apiServer.listen(port, '127.0.0.1', () => resolve());
+            apiServer.on('error', reject);
+        });
+        apiServerRunning = true;
+        console.log(`🔌 API Server started on http://localhost:${port}`);
+        return { success: true, port };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+});
+
+ipcMain.handle('stop-api-server', async () => {
+    if (!apiServer) return { success: true };
+    return new Promise(resolve => {
+        apiServer.close(() => {
+            apiServer = null;
+            apiServerRunning = false;
+            console.log('🔌 API Server stopped');
+            resolve({ success: true });
+        });
+    });
+});
+
+ipcMain.handle('get-api-status', () => {
+    return { running: apiServerRunning };
+});
+
 
 function forceKill(pid) {
     return new Promise((resolve) => {
@@ -129,7 +455,15 @@ function createWindow() {
     });
     win.setMenuBarVisibility(false);
     win.loadFile('index.html');
+    mainWindow = win; // Store global reference for API
     return win;
+}
+
+// Helper to notify UI to refresh profiles
+function notifyUIRefresh() {
+    if (mainWindow && mainWindow.webContents) {
+        mainWindow.webContents.send('refresh-profiles');
+    }
 }
 
 async function generateExtension(profilePath, fingerprint, profileName, watermarkStyle) {
@@ -1035,6 +1369,18 @@ ipcMain.handle('launch-profile', async (event, profileId, watermarkStyle) => {
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         }
 
+        // 6. Custom Launch Arguments (if enabled)
+        if (settings.enableCustomArgs && profile.customArgs) {
+            const customArgsList = profile.customArgs
+                .split(/[\n\s]+/)
+                .map(arg => arg.trim())
+                .filter(arg => arg && arg.startsWith('--'));
+
+            if (customArgsList.length > 0) {
+                launchArgs.push(...customArgsList);
+                console.log('⚡ Custom Args:', customArgsList.join(' '));
+            }
+        }
 
         // 5. 启动浏览器
         const chromePath = getChromiumPath();

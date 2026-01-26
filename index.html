@@ -1175,6 +1175,16 @@
                         ⚠️ Enabling debugging port may increase detection risk
                     </div>
                 </div>
+                <!-- Custom Launch Arguments (conditional) -->
+                <div id="customArgsSection" style="display:none; margin-top:12px;">
+                    <label style="font-size:11px; font-weight:bold; opacity:0.8;" data-i18n="customArgsLabel">Custom
+                        Launch Arguments</label>
+                    <textarea id="editCustomArgs" rows="2" placeholder="--start-maximized --disable-images"
+                        spellcheck="false" style="font-family:monospace; font-size:11px;"></textarea>
+                    <div style="font-size:10px; opacity:0.6; margin-top:4px;" data-i18n="customArgsHint">
+                        One argument per line or space-separated. Example: --start-maximized
+                    </div>
+                </div>
             </div>
             <div class="modal-footer"><button class="outline" onclick="closeEditModal()"
                     data-i18n="cancel">Cancel</button><button onclick="saveEditProfile()" data-i18n="save">Save</button>
@@ -1383,45 +1393,113 @@
                     <h3 style="margin-bottom:15px; color:var(--accent);" data-i18n="settingsAdvTitle">Advanced Settings
                     </h3>
 
-                    <!-- Remote Debugging Section -->
+                    <!-- Developer Features - Unified Tech Style -->
                     <div style="margin-bottom: 25px;">
-                        <h4 style="margin-bottom:10px; color:var(--text-primary); font-size:14px;"
-                            data-i18n="debugTitle">🔧 Remote Debugging
-                        </h4>
-                        <p style="font-size:12px; opacity:0.7; margin-bottom:15px;" data-i18n="debugDesc">
-                            Enable remote debugging port for external Puppeteer/DevTools connection
-                        </p>
-
-                        <div
-                            style="background:rgba(239,83,80,0.1); border:1px solid var(--danger); border-radius:6px; padding:12px; margin-bottom:15px;">
-                            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-                                <span style="font-size:18px;">⚠️</span>
-                                <strong style="color:var(--danger);" data-i18n="debugWarningTitle">Detection Risk
-                                    Warning</strong>
+                        <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+                            <div
+                                style="width:4px; height:20px; background:linear-gradient(180deg, var(--accent), #7c3aed); border-radius:2px;">
                             </div>
-                            <p style="font-size:11px; line-height:1.5; margin:0; opacity:0.9;"
-                                data-i18n="debugWarningText">
-                                Enabling remote debugging may increase the risk of automation detection by anti-bot
-                                systems.
-                                Only enable this feature when you need external control via Puppeteer or Chrome
-                                DevTools.
-                            </p>
+                            <h4 style="margin:0; color:var(--text-primary); font-size:15px; font-weight:600; letter-spacing:0.5px;"
+                                data-i18n="devFeaturesTitle">
+                                DEVELOPER FEATURES
+                            </h4>
                         </div>
 
-                        <label
-                            style="display:flex; align-items:center; gap:10px; padding:12px; border:1px solid var(--border); border-radius:6px; cursor:pointer;">
-                            <input type="checkbox" id="enableRemoteDebugging" style="width:auto; cursor:pointer;"
-                                onchange="saveRemoteDebuggingSetting(this.checked)">
-                            <div style="flex:1;">
-                                <div style="font-weight:bold; margin-bottom:3px; color:var(--text-primary);"
-                                    data-i18n="debugEnableLabel">
-                                    Enable Remote Debugging Port
+                        <div
+                            style="border:1px solid var(--border); border-radius:12px; padding:4px; background:var(--card-bg);">
+
+                            <!-- Remote Debugging Toggle -->
+                            <label class="dev-toggle-item"
+                                style="display:flex; align-items:center; gap:14px; padding:14px 16px; cursor:pointer; border-radius:8px; transition:all 0.2s;">
+                                <div class="toggle-switch"
+                                    style="position:relative; width:44px; height:24px; flex-shrink:0;">
+                                    <input type="checkbox" id="enableRemoteDebugging"
+                                        style="opacity:0; width:0; height:0; position:absolute;"
+                                        onchange="handleDevToggle(this)">
+                                    <div class="toggle-track"
+                                        style="position:absolute; inset:0; background:var(--border); border-radius:12px; transition:0.3s;">
+                                    </div>
+                                    <div class="toggle-knob"
+                                        style="position:absolute; top:2px; left:2px; width:20px; height:20px; background:#fff; border-radius:50%; transition:0.3s; box-shadow:0 2px 4px rgba(0,0,0,0.2);">
+                                    </div>
                                 </div>
-                                <div style="font-size:11px; color:var(--text-secondary);" data-i18n="debugEnableDesc">
-                                    When enabled, you can specify a custom debugging port for each profile
+                                <div style="flex:1;">
+                                    <div style="font-size:13px; font-weight:500; color:var(--text-primary);"
+                                        data-i18n="debugToggle">🔧 远程调试</div>
+                                    <div style="font-size:11px; color:var(--text-secondary); opacity:0.8;"
+                                        data-i18n="debugToggleHint">启用后可为环境设置远程调试端口，用于 Puppeteer 或 DevTools 连接</div>
+                                </div>
+                            </label>
+
+                            <div style="height:1px; background:var(--border); margin:0 16px;"></div>
+
+                            <!-- Custom Args Toggle -->
+                            <label class="dev-toggle-item"
+                                style="display:flex; align-items:center; gap:14px; padding:14px 16px; cursor:pointer; border-radius:8px; transition:all 0.2s;">
+                                <div class="toggle-switch"
+                                    style="position:relative; width:44px; height:24px; flex-shrink:0;">
+                                    <input type="checkbox" id="enableCustomArgs"
+                                        style="opacity:0; width:0; height:0; position:absolute;"
+                                        onchange="handleDevToggle(this)">
+                                    <div class="toggle-track"
+                                        style="position:absolute; inset:0; background:var(--border); border-radius:12px; transition:0.3s;">
+                                    </div>
+                                    <div class="toggle-knob"
+                                        style="position:absolute; top:2px; left:2px; width:20px; height:20px; background:#fff; border-radius:50%; transition:0.3s; box-shadow:0 2px 4px rgba(0,0,0,0.2);">
+                                    </div>
+                                </div>
+                                <div style="flex:1;">
+                                    <div style="font-size:13px; font-weight:500; color:var(--text-primary);"
+                                        data-i18n="argsToggle">⚡ 自定义启动参数</div>
+                                    <div style="font-size:11px; color:var(--text-secondary); opacity:0.8;"
+                                        data-i18n="argsToggleHint">启用后可为每个环境添加自定义 Chrome 启动参数</div>
+                                </div>
+                            </label>
+
+                            <div style="height:1px; background:var(--border); margin:0 16px;"></div>
+
+                            <!-- API Server Toggle -->
+                            <label class="dev-toggle-item"
+                                style="display:flex; align-items:center; gap:14px; padding:14px 16px; cursor:pointer; border-radius:8px; transition:all 0.2s;">
+                                <div class="toggle-switch"
+                                    style="position:relative; width:44px; height:24px; flex-shrink:0;">
+                                    <input type="checkbox" id="enableApiServer"
+                                        style="opacity:0; width:0; height:0; position:absolute;"
+                                        onchange="handleDevToggle(this)">
+                                    <div class="toggle-track"
+                                        style="position:absolute; inset:0; background:var(--border); border-radius:12px; transition:0.3s;">
+                                    </div>
+                                    <div class="toggle-knob"
+                                        style="position:absolute; top:2px; left:2px; width:20px; height:20px; background:#fff; border-radius:50%; transition:0.3s; box-shadow:0 2px 4px rgba(0,0,0,0.2);">
+                                    </div>
+                                </div>
+                                <div style="flex:1;">
+                                    <div style="font-size:13px; font-weight:500; color:var(--text-primary);"
+                                        data-i18n="apiToggle">🔌 API 服务</div>
+                                    <div style="font-size:11px; color:var(--text-secondary); opacity:0.8;"
+                                        data-i18n="apiToggleHint">启用后可通过 REST API 远程管理环境</div>
+                                </div>
+                                <span id="apiStatus"
+                                    style="font-size:10px; padding:3px 8px; background:rgba(76,175,80,0.2); color:#4CAF50; border-radius:10px; font-weight:500; display:none;">●
+                                    Live</span>
+                            </label>
+
+                            <!-- API Port Config (shown when enabled) -->
+                            <div id="apiPortSection"
+                                style="display:none; padding:12px 16px; margin:4px 12px 12px; background:var(--input-bg); border-radius:8px; border:1px solid var(--border);">
+                                <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                                    <code
+                                        style="font-size:12px; color:var(--accent);">http://localhost:<span id="apiPortDisplay">12138</span></code>
+                                    <input type="number" id="apiPortInput" value="12138" min="1024" max="65535"
+                                        style="width:80px; padding:6px 10px; border-radius:6px; border:1px solid var(--border); background:var(--input-bg); color:var(--text-primary); font-size:12px;">
+                                    <button class="outline" onclick="saveApiPort()"
+                                        style="padding:6px 14px; font-size:11px;">Apply</button>
+                                    <a href="#" onclick="openApiDocs(); return false;"
+                                        style="font-size:11px; color:var(--accent); margin-left:auto;"
+                                        data-i18n="apiDocs">📄 Docs</a>
                                 </div>
                             </div>
-                        </label>
+                        </div>
                     </div>
 
                     <!-- Watermark Style Section -->
