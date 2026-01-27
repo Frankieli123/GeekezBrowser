@@ -502,10 +502,14 @@
             overflow: hidden;
         }
 
-        #proxyModal .modal-content,
-        #helpModal .modal-content {
+        #proxyModal .modal-content {
             width: 800px;
             height: 85vh;
+        }
+
+        #helpModal .modal-content {
+            width: 500px;
+            height: 75vh;
         }
 
         #confirmModal .modal-content,
@@ -1208,7 +1212,25 @@
         </div>
         <div style="display:flex; gap:10px;">
             <button class="outline" onclick="openExportModal()" data-i18n="btnExport">📤 Export</button>
-            <button class="outline" onclick="importData()" data-i18n="importYaml">📥 Import</button>
+            <div style="position: relative;">
+                <button class="outline" onclick="toggleImportMenu()" id="importBtn" data-i18n="importYaml">📥 Import
+                    ▾</button>
+                <div id="importMenu"
+                    style="display: none; position: absolute; top: 35px; right: 0; background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; min-width: 200px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+                    <div onclick="importFullBackup(); closeImportMenu();"
+                        style="padding: 10px 15px; cursor: pointer; font-size: 13px;"
+                        onmouseover="this.style.background='rgba(128,128,128,0.1)'"
+                        onmouseout="this.style.background='transparent'">
+                        🔐 导入完整备份 (.geekez)
+                    </div>
+                    <div onclick="importData(); closeImportMenu();"
+                        style="padding: 10px 15px; cursor: pointer; border-bottom: 1px solid var(--border); font-size: 13px;"
+                        onmouseover="this.style.background='rgba(128,128,128,0.1)'"
+                        onmouseout="this.style.background='transparent'">
+                        📄 导入 YAML 配置
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1249,8 +1271,10 @@
                     <div class="timezone-dropdown" id="addTimezoneDropdown"></div>
                 </div>
                 <label data-i18n="proxyLink" style="font-size:11px; font-weight:bold; opacity:0.8;">Proxy</label>
-                <textarea id="addProxy" rows="4" placeholder="vmess://, ss://..." spellcheck="false"
-                    autocomplete="off"></textarea>
+                <textarea id="addProxy" rows="4" placeholder="vmess://, ss://... (one per line for batch)"
+                    spellcheck="false" autocomplete="off"></textarea>
+                <div style="font-size:10px; opacity:0.5; margin-bottom:8px;" data-i18n="batchHint">Multiple links =
+                    batch create profiles</div>
                 <!-- Location Selector (Searchable) -->
                 <label data-i18n="locationLabel"
                     style="font-size:11px; font-weight:bold; opacity:0.8; margin-top:8px; display:block;">Location
@@ -1586,6 +1610,16 @@
                         </div>
                     </div>
                 </div>
+                <!-- Custom Launch Arguments (conditional) -->
+                <div id="customArgsSection" style="display:none; margin-top:12px;">
+                    <label style="font-size:11px; font-weight:bold; opacity:0.8;" data-i18n="customArgsLabel">Custom
+                        Launch Arguments</label>
+                    <textarea id="editCustomArgs" rows="2" placeholder="--start-maximized --disable-images"
+                        spellcheck="false" style="font-family:monospace; font-size:11px;"></textarea>
+                    <div style="font-size:10px; opacity:0.6; margin-top:4px;" data-i18n="customArgsHint">
+                        One argument per line or space-separated. Example: --start-maximized
+                    </div>
+                </div>
             </div>
             <div class="modal-footer"><button class="outline" onclick="closeEditModal()"
                     data-i18n="cancel">Cancel</button><button onclick="saveEditProfile()" data-i18n="save">Save</button>
@@ -1634,23 +1668,94 @@
         <div class="modal-content">
             <div class="modal-header"><span data-i18n="exportTitle">Export</span><span style="cursor:pointer"
                     onclick="closeExportModal()">✕</span></div>
-            <div class="export-option" onclick="exportData('all')">
+            <div class="export-option" onclick="openExportSelectModal('full-backup')">
                 <div>
-                    <div class="export-title" data-i18n="expAll">All</div>
-                    <div class="export-desc" data-i18n="expAllDesc">Full</div>
+                    <div class="export-title" style="color: var(--accent);" data-i18n="expFullBackup">🔐 完整备份（全部）</div>
+                    <div class="export-desc" data-i18n="expFullBackupDesc">含浏览器数据（Cookie/密码/书签），AES-256加密</div>
+                </div><span>🔒</span>
+            </div>
+            <div class="export-option" onclick="openExportSelectModal('all')">
+                <div>
+                    <div class="export-title" data-i18n="expAllProfiles">完整备份（指纹环境）</div>
+                    <div class="export-desc" data-i18n="expAllProfilesDesc">导出指纹配置 + 前置代理（不含浏览器数据）</div>
                 </div><span>📦</span>
             </div>
-            <div class="export-option" onclick="exportData('proxies')">
+            <div class="export-option" onclick="openExportSelectModal('proxies')">
                 <div>
-                    <div class="export-title" data-i18n="expProxies">Proxies</div>
-                    <div class="export-desc" data-i18n="expProxiesDesc">Proxies</div>
+                    <div class="export-title" data-i18n="expProxies">前置代理</div>
+                    <div class="export-desc" data-i18n="expProxiesDesc">导出手动节点和订阅配置</div>
                 </div><span>🔗</span>
             </div>
-            <div class="export-option" onclick="exportData('profiles')">
+            <div class="export-option" onclick="openExportSelectModal('profiles')">
                 <div>
-                    <div class="export-title" data-i18n="expProfiles">Profiles</div>
-                    <div class="export-desc" data-i18n="expProfilesDesc">Profiles</div>
+                    <div class="export-title" data-i18n="expProfiles">指纹环境</div>
+                    <div class="export-desc" data-i18n="expProfilesDesc">仅导出环境指纹配置</div>
                 </div><span>👤</span>
+            </div>
+        </div>
+    </div>
+    <!-- 导出环境选择模态框 -->
+    <div id="exportSelectModal" class="modal-overlay" style="z-index: 2300;">
+        <div class="modal-content" style="width: 480px; max-width: 90vw;">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border); padding-bottom: 12px;">
+                <span id="exportSelectTitle"
+                    style="font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 8px;">
+                    <span style="color: var(--accent);">📦</span>
+                    <span data-i18n="expSelectTitle">选择要导出的环境</span>
+                </span>
+                <span style="cursor:pointer; padding: 4px 8px; border-radius: 4px; transition: background 0.15s;"
+                    onmouseover="this.style.background='rgba(255,255,255,0.1)'"
+                    onmouseout="this.style.background='transparent'" onclick="closeExportSelectModal()">✕</span>
+            </div>
+            <div class="modal-body" style="padding: 16px 0;">
+                <!-- 顶部控制栏 -->
+                <div
+                    style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding: 8px 12px; background: rgba(0,255,255,0.05); border-radius: 8px; border: 1px solid rgba(0,255,255,0.1);">
+                    <label
+                        style="display: flex; align-items: center; gap: 10px; cursor: pointer; white-space: nowrap; font-size: 13px;">
+                        <input type="checkbox" id="exportSelectAll" checked onchange="toggleExportSelectAll()"
+                            style="width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer;">
+                        <span data-i18n="expSelectAll" style="font-weight: 500;">全选</span>
+                    </label>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <span id="exportSelectedCount"
+                            style="font-size: 12px; color: var(--accent); font-weight: 600; background: rgba(0,255,255,0.1); padding: 4px 10px; border-radius: 12px;">0/0</span>
+                        <span style="font-size: 12px; color: var(--text-secondary);" data-i18n="expSelected">已选择</span>
+                    </div>
+                </div>
+                <!-- 环境列表 -->
+                <div id="exportProfileList"
+                    style="max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; padding: 8px; background: rgba(0,0,0,0.2);">
+                </div>
+            </div>
+            <div class="modal-footer"
+                style="display: flex; justify-content: flex-end; gap: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
+                <button class="outline" onclick="closeExportSelectModal()" data-i18n="cancel"
+                    style="padding: 8px 20px;">取消</button>
+                <button onclick="confirmExport()" data-i18n="expConfirm"
+                    style="padding: 8px 24px; background: var(--accent); color: var(--bg-color); font-weight: 600;">导出</button>
+            </div>
+        </div>
+    </div>
+    <!-- 密码输入模态框 -->
+    <div id="passwordModal" class="modal-overlay" style="z-index: 2400;">
+        <div class="modal-content" style="width: 380px;">
+            <div class="modal-header">
+                <span id="passwordModalTitle">设置备份密码</span>
+                <span style="cursor:pointer" onclick="closePasswordModal()">✕</span>
+            </div>
+            <div class="modal-body">
+                <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 15px;">
+                    完整备份包含敏感数据（Cookie、密码等），将使用 AES-256 加密保护。
+                </p>
+                <label style="font-size: 12px;">密码</label>
+                <input type="password" id="backupPassword" placeholder="请输入密码" style="margin-bottom: 10px;">
+                <label style="font-size: 12px;" id="confirmPasswordLabel">确认密码</label>
+                <input type="password" id="backupPasswordConfirm" placeholder="请再次输入密码">
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button class="outline" onclick="closePasswordModal()">取消</button>
+                <button onclick="submitPassword()">确定</button>
             </div>
         </div>
     </div>
@@ -1723,45 +1828,113 @@
                     <h3 style="margin-bottom:15px; color:var(--accent);" data-i18n="settingsAdvTitle">Advanced Settings
                     </h3>
 
-                    <!-- Remote Debugging Section -->
+                    <!-- Developer Features - Unified Tech Style -->
                     <div style="margin-bottom: 25px;">
-                        <h4 style="margin-bottom:10px; color:var(--text-primary); font-size:14px;"
-                            data-i18n="debugTitle">🔧 Remote Debugging
-                        </h4>
-                        <p style="font-size:12px; opacity:0.7; margin-bottom:15px;" data-i18n="debugDesc">
-                            Enable remote debugging port for external Puppeteer/DevTools connection
-                        </p>
-
-                        <div
-                            style="background:rgba(239,83,80,0.1); border:1px solid var(--danger); border-radius:6px; padding:12px; margin-bottom:15px;">
-                            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-                                <span style="font-size:18px;">⚠️</span>
-                                <strong style="color:var(--danger);" data-i18n="debugWarningTitle">Detection Risk
-                                    Warning</strong>
+                        <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+                            <div
+                                style="width:4px; height:20px; background:linear-gradient(180deg, var(--accent), #7c3aed); border-radius:2px;">
                             </div>
-                            <p style="font-size:11px; line-height:1.5; margin:0; opacity:0.9;"
-                                data-i18n="debugWarningText">
-                                Enabling remote debugging may increase the risk of automation detection by anti-bot
-                                systems.
-                                Only enable this feature when you need external control via Puppeteer or Chrome
-                                DevTools.
-                            </p>
+                            <h4 style="margin:0; color:var(--text-primary); font-size:15px; font-weight:600; letter-spacing:0.5px;"
+                                data-i18n="devFeaturesTitle">
+                                DEVELOPER FEATURES
+                            </h4>
                         </div>
 
-                        <label
-                            style="display:flex; align-items:center; gap:10px; padding:12px; border:1px solid var(--border); border-radius:6px; cursor:pointer;">
-                            <input type="checkbox" id="enableRemoteDebugging" style="width:auto; cursor:pointer;"
-                                onchange="saveRemoteDebuggingSetting(this.checked)">
-                            <div style="flex:1;">
-                                <div style="font-weight:bold; margin-bottom:3px; color:var(--text-primary);"
-                                    data-i18n="debugEnableLabel">
-                                    Enable Remote Debugging Port
+                        <div
+                            style="border:1px solid var(--border); border-radius:12px; padding:4px; background:var(--card-bg);">
+
+                            <!-- Remote Debugging Toggle -->
+                            <label class="dev-toggle-item"
+                                style="display:flex; align-items:center; gap:14px; padding:14px 16px; cursor:pointer; border-radius:8px; transition:all 0.2s;">
+                                <div class="toggle-switch"
+                                    style="position:relative; width:44px; height:24px; flex-shrink:0;">
+                                    <input type="checkbox" id="enableRemoteDebugging"
+                                        style="opacity:0; width:0; height:0; position:absolute;"
+                                        onchange="handleDevToggle(this)">
+                                    <div class="toggle-track"
+                                        style="position:absolute; inset:0; background:var(--border); border-radius:12px; transition:0.3s;">
+                                    </div>
+                                    <div class="toggle-knob"
+                                        style="position:absolute; top:2px; left:2px; width:20px; height:20px; background:#fff; border-radius:50%; transition:0.3s; box-shadow:0 2px 4px rgba(0,0,0,0.2);">
+                                    </div>
                                 </div>
-                                <div style="font-size:11px; color:var(--text-secondary);" data-i18n="debugEnableDesc">
-                                    When enabled, you can specify a custom debugging port for each profile
+                                <div style="flex:1;">
+                                    <div style="font-size:13px; font-weight:500; color:var(--text-primary);"
+                                        data-i18n="debugToggle">🔧 远程调试</div>
+                                    <div style="font-size:11px; color:var(--text-secondary); opacity:0.8;"
+                                        data-i18n="debugToggleHint">启用后可为环境设置远程调试端口，用于 Puppeteer 或 DevTools 连接</div>
+                                </div>
+                            </label>
+
+                            <div style="height:1px; background:var(--border); margin:0 16px;"></div>
+
+                            <!-- Custom Args Toggle -->
+                            <label class="dev-toggle-item"
+                                style="display:flex; align-items:center; gap:14px; padding:14px 16px; cursor:pointer; border-radius:8px; transition:all 0.2s;">
+                                <div class="toggle-switch"
+                                    style="position:relative; width:44px; height:24px; flex-shrink:0;">
+                                    <input type="checkbox" id="enableCustomArgs"
+                                        style="opacity:0; width:0; height:0; position:absolute;"
+                                        onchange="handleDevToggle(this)">
+                                    <div class="toggle-track"
+                                        style="position:absolute; inset:0; background:var(--border); border-radius:12px; transition:0.3s;">
+                                    </div>
+                                    <div class="toggle-knob"
+                                        style="position:absolute; top:2px; left:2px; width:20px; height:20px; background:#fff; border-radius:50%; transition:0.3s; box-shadow:0 2px 4px rgba(0,0,0,0.2);">
+                                    </div>
+                                </div>
+                                <div style="flex:1;">
+                                    <div style="font-size:13px; font-weight:500; color:var(--text-primary);"
+                                        data-i18n="argsToggle">⚡ 自定义启动参数</div>
+                                    <div style="font-size:11px; color:var(--text-secondary); opacity:0.8;"
+                                        data-i18n="argsToggleHint">启用后可为每个环境添加自定义 Chrome 启动参数</div>
+                                </div>
+                            </label>
+
+                            <div style="height:1px; background:var(--border); margin:0 16px;"></div>
+
+                            <!-- API Server Toggle -->
+                            <label class="dev-toggle-item"
+                                style="display:flex; align-items:center; gap:14px; padding:14px 16px; cursor:pointer; border-radius:8px; transition:all 0.2s;">
+                                <div class="toggle-switch"
+                                    style="position:relative; width:44px; height:24px; flex-shrink:0;">
+                                    <input type="checkbox" id="enableApiServer"
+                                        style="opacity:0; width:0; height:0; position:absolute;"
+                                        onchange="handleDevToggle(this)">
+                                    <div class="toggle-track"
+                                        style="position:absolute; inset:0; background:var(--border); border-radius:12px; transition:0.3s;">
+                                    </div>
+                                    <div class="toggle-knob"
+                                        style="position:absolute; top:2px; left:2px; width:20px; height:20px; background:#fff; border-radius:50%; transition:0.3s; box-shadow:0 2px 4px rgba(0,0,0,0.2);">
+                                    </div>
+                                </div>
+                                <div style="flex:1;">
+                                    <div style="font-size:13px; font-weight:500; color:var(--text-primary);"
+                                        data-i18n="apiToggle">🔌 API 服务</div>
+                                    <div style="font-size:11px; color:var(--text-secondary); opacity:0.8;"
+                                        data-i18n="apiToggleHint">启用后可通过 REST API 远程管理环境</div>
+                                </div>
+                                <span id="apiStatus"
+                                    style="font-size:10px; padding:3px 8px; background:rgba(76,175,80,0.2); color:#4CAF50; border-radius:10px; font-weight:500; display:none;">●
+                                    Live</span>
+                            </label>
+
+                            <!-- API Port Config (shown when enabled) -->
+                            <div id="apiPortSection"
+                                style="display:none; padding:12px 16px; margin:4px 12px 12px; background:var(--input-bg); border-radius:8px; border:1px solid var(--border);">
+                                <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                                    <code
+                                        style="font-size:12px; color:var(--accent);">http://localhost:<span id="apiPortDisplay">12138</span></code>
+                                    <input type="number" id="apiPortInput" value="12138" min="1024" max="65535"
+                                        style="width:80px; padding:6px 10px; border-radius:6px; border:1px solid var(--border); background:var(--input-bg); color:var(--text-primary); font-size:12px;">
+                                    <button class="outline" onclick="saveApiPort()"
+                                        style="padding:6px 14px; font-size:11px;">Apply</button>
+                                    <a href="#" onclick="openApiDocs(); return false;"
+                                        style="font-size:11px; color:var(--accent); margin-left:auto;"
+                                        data-i18n="apiDocs">📄 Docs</a>
                                 </div>
                             </div>
-                        </label>
+                        </div>
                     </div>
 
                     <!-- Launch Settings Section -->
@@ -1849,6 +2022,47 @@
                                     </div>
                                 </div>
                             </label>
+                        </div>
+                    </div>
+
+                    <!-- Data Directory Section -->
+                    <div style="margin-bottom: 25px;">
+                        <h4 style="margin-bottom:10px; color:var(--text-primary); font-size:14px;"
+                            data-i18n="dataPathTitle">📁 Data Directory</h4>
+                        <p style="font-size:12px; opacity:0.7; margin-bottom:15px;" data-i18n="dataPathDesc">
+                            Change the location where profile data is stored
+                        </p>
+
+                        <div
+                            style="background:rgba(0,0,0,0.2); border:1px solid var(--border); border-radius:8px; padding:15px;">
+                            <div style="margin-bottom:12px;">
+                                <label style="font-size:11px; opacity:0.6; margin-bottom:5px; display:block;"
+                                    data-i18n="dataPathCurrent">Current Path:</label>
+                                <div id="currentDataPath"
+                                    style="font-size:12px; font-family:monospace; background:rgba(0,0,0,0.3); padding:8px 12px; border-radius:6px; word-break:break-all; color:var(--accent);">
+                                    Loading...
+                                </div>
+                            </div>
+
+                            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                                <button class="outline" onclick="selectDataDirectory()" style="flex:1; min-width:120px;"
+                                    data-i18n="dataPathBrowse">
+                                    📂 Browse...
+                                </button>
+                                <button class="outline" onclick="resetDataDirectory()" id="resetDataPathBtn"
+                                    style="flex:1; min-width:120px; display:none;" data-i18n="dataPathReset">
+                                    ↩️ Reset to Default
+                                </button>
+                            </div>
+
+                            <div style="margin-top:12px; padding:10px; background:rgba(255,193,7,0.1); border:1px solid rgba(255,193,7,0.3); border-radius:6px; display:none;"
+                                id="dataPathWarning">
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <span style="font-size:16px;">⚠️</span>
+                                    <span style="font-size:11px; color:var(--warning);"
+                                        data-i18n="dataPathRestart">Restart required for changes to take effect</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

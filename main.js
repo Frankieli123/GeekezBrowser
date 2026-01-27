@@ -11,6 +11,11 @@ const http = require('http');
 const https = require('https');
 const os = require('os');
 const net = require('net');
+const crypto = require('crypto');
+const zlib = require('zlib');
+const { promisify } = require('util');
+const gzip = promisify(zlib.gzip);
+const gunzip = promisify(zlib.gunzip);
 
 
 // Hardware acceleration enabled for better UI performance
@@ -28,7 +33,27 @@ const BIN_PATH = path.join(BIN_DIR, process.platform === 'win32' ? 'xray.exe' : 
 // Fallback to old location for backward compatibility
 const BIN_DIR_LEGACY = RESOURCES_BIN;
 const BIN_PATH_LEGACY = path.join(BIN_DIR_LEGACY, process.platform === 'win32' ? 'xray.exe' : 'xray');
-const DATA_PATH = path.join(app.getPath('userData'), 'BrowserProfiles');
+
+// 自定义数据目录支持
+const APP_CONFIG_FILE = path.join(app.getPath('userData'), 'app-config.json');
+const DEFAULT_DATA_PATH = path.join(app.getPath('userData'), 'BrowserProfiles');
+
+// 读取自定义数据目录
+function getCustomDataPath() {
+    try {
+        if (fs.existsSync(APP_CONFIG_FILE)) {
+            const config = fs.readJsonSync(APP_CONFIG_FILE);
+            if (config.customDataPath && fs.existsSync(config.customDataPath)) {
+                return config.customDataPath;
+            }
+        }
+    } catch (e) {
+        console.error('Failed to read custom data path:', e);
+    }
+    return DEFAULT_DATA_PATH;
+}
+
+const DATA_PATH = getCustomDataPath();
 const TRASH_PATH = path.join(app.getPath('userData'), '_Trash_Bin');
 const PROFILES_FILE = path.join(DATA_PATH, 'profiles.json');
 const SETTINGS_FILE = path.join(DATA_PATH, 'settings.json');
@@ -44,6 +69,332 @@ let sshHostKeyPromptSeq = 0;
 
 const LOCAL_API_HOST = '127.0.0.1';
 const LOCAL_API_PORT = Number.parseInt(process.env.GEEKEZ_API_PORT || '17555', 10) || 17555;
+let apiServer = null;
+let apiServerRunning = false;
+let mainWindow = null; // Global reference for API-to-UI communication
+
+// ============================================================================
+// REST API Server
+// ============================================================================
+function createApiServer(port) {
+    const server = http.createServer(async (req, res) => {
+        // CORS headers
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        res.setHeader('Content-Type', 'application/json');
+
+        if (req.method === 'OPTIONS') {
+            res.writeHead(200);
+            res.end();
+            return;
+        }
+
+        const url = new URL(req.url, `http://localhost:${port}`);
+        const pathname = url.pathname;
+        const method = req.method;
+
+        // Parse body for POST/PUT
+        let body = '';
+        if (method === 'POST' || method === 'PUT') {
+            body = await new Promise(resolve => {
+                let data = '';
+                req.on('data', chunk => data += chunk);
+                req.on('end', () => resolve(data));
+            });
+        }
+
+        try {
+            const result = await handleApiRequest(method, pathname, body, url.searchParams);
+            res.writeHead(result.status || 200);
+            res.end(JSON.stringify(result.data || result));
+        } catch (err) {
+            console.error('API Error:', err);
+            res.writeHead(500);
+            res.end(JSON.stringify({ success: false, error: err.message }));
+        }
+    });
+
+    return server;
+}
+
+async function handleApiRequest(method, pathname, body, params) {
+    let profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+    const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : {};
+
+    // Helper: Find profile by ID or Name
+    const findProfile = (idOrName) => {
+        return profiles.find(p => p.id === idOrName || p.name === idOrName);
+    };
+
+    // Helper: Generate unique name
+    const generateUniqueName = (baseName) => {
+        if (!profiles.find(p => p.name === baseName)) return baseName;
+        let suffix = 2;
+        while (profiles.find(p => p.name === `${baseName}-${String(suffix).padStart(2, '0')}`)) {
+            suffix++;
+        }
+        return `${baseName}-${String(suffix).padStart(2, '0')}`;
+    };
+
+    // GET /api/status
+    if (method === 'GET' && pathname === '/api/status') {
+        return { success: true, running: Object.keys(activeProcesses), count: Object.keys(activeProcesses).length };
+    }
+
+    // GET /api/profiles
+    if (method === 'GET' && pathname === '/api/profiles') {
+        return { success: true, profiles: profiles.map(p => ({ id: p.id, name: p.name, tags: p.tags, running: !!activeProcesses[p.id] })) };
+    }
+
+    // GET /api/profiles/:idOrName
+    const profileMatch = pathname.match(/^\/api\/profiles\/([^\/]+)$/);
+    if (method === 'GET' && profileMatch) {
+        const profile = findProfile(decodeURIComponent(profileMatch[1]));
+        if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
+        return { success: true, profile: { ...profile, running: !!activeProcesses[profile.id] } };
+    }
+
+    // POST /api/profiles - Create with unique name
+    if (method === 'POST' && pathname === '/api/profiles') {
+        const data = JSON.parse(body);
+        const id = uuidv4();
+        const fingerprint = await generateFingerprint({});
+        const baseName = data.name || `Profile-${Date.now()}`;
+        const uniqueName = generateUniqueName(baseName);
+        const newProfile = {
+            id,
+            name: uniqueName,
+            proxyStr: data.proxyStr || '',
+            tags: data.tags || [],
+            fingerprint,
+            createdAt: Date.now()
+        };
+        profiles.push(newProfile);
+        await fs.writeJson(PROFILES_FILE, profiles);
+        notifyUIRefresh(); // Notify UI to refresh
+        return { success: true, profile: newProfile };
+    }
+
+    // PUT /api/profiles/:idOrName - Edit
+    if (method === 'PUT' && profileMatch) {
+        const profile = findProfile(decodeURIComponent(profileMatch[1]));
+        if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
+        const idx = profiles.findIndex(p => p.id === profile.id);
+        const data = JSON.parse(body);
+        // If name changed, ensure uniqueness
+        if (data.name && data.name !== profile.name) {
+            data.name = generateUniqueName(data.name);
+        }
+        profiles[idx] = { ...profiles[idx], ...data };
+        await fs.writeJson(PROFILES_FILE, profiles);
+        return { success: true, profile: profiles[idx] };
+    }
+
+    // DELETE /api/profiles/:idOrName
+    if (method === 'DELETE' && profileMatch) {
+        const profile = findProfile(decodeURIComponent(profileMatch[1]));
+        if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
+        profiles = profiles.filter(p => p.id !== profile.id);
+        await fs.writeJson(PROFILES_FILE, profiles);
+        notifyUIRefresh(); // Notify UI to refresh
+        return { success: true, message: 'Profile deleted' };
+    }
+
+    // GET /api/open/:idOrName - Launch profile
+    const openMatch = pathname.match(/^\/api\/open\/([^\/]+)$/);
+    if (method === 'GET' && openMatch) {
+        const profile = findProfile(decodeURIComponent(openMatch[1]));
+        if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
+        if (activeProcesses[profile.id]) return { success: true, message: 'Already running', profileId: profile.id };
+        // Trigger launch via IPC to main window
+        if (mainWindow && mainWindow.webContents) {
+            mainWindow.webContents.send('api-launch-profile', profile.id);
+        }
+        return { success: true, message: 'Launch requested', profileId: profile.id, name: profile.name };
+    }
+
+    // POST /api/profiles/:idOrName/stop - Stop profile
+    const stopMatch = pathname.match(/^\/api\/profiles\/([^\/]+)\/stop$/);
+    if (method === 'POST' && stopMatch) {
+        const profile = findProfile(decodeURIComponent(stopMatch[1]));
+        if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
+        const proc = activeProcesses[profile.id];
+        if (!proc) return { status: 404, data: { success: false, error: 'Profile not running' } };
+        await forceKill(proc.xrayPid);
+        await forceKill(proc.chromePid);
+        delete activeProcesses[profile.id];
+        return { success: true, message: 'Profile stopped' };
+    }
+
+    // GET /api/export/all?password=xxx - Export full backup
+    if (method === 'GET' && pathname === '/api/export/all') {
+        const password = params.get('password');
+        if (!password) return { status: 400, data: { success: false, error: 'Password required. Use ?password=yourpassword' } };
+
+        // Build backup data
+        const backupData = {
+            version: 1,
+            createdAt: Date.now(),
+            profiles: profiles.map(p => ({ ...p, fingerprint: cleanFingerprint ? cleanFingerprint(p.fingerprint) : p.fingerprint })),
+            preProxies: settings.preProxies || [],
+            subscriptions: settings.subscriptions || [],
+            browserData: {}
+        };
+
+        // Collect browser data
+        for (const profile of profiles) {
+            const profileDataDir = path.join(DATA_PATH, profile.id, 'browser_data');
+            if (fs.existsSync(profileDataDir)) {
+                const defaultDir = path.join(profileDataDir, 'Default');
+                if (fs.existsSync(defaultDir)) {
+                    const browserFiles = {};
+                    const filesToBackup = ['Bookmarks', 'Cookies', 'Login Data', 'Web Data', 'Preferences'];
+                    for (const fileName of filesToBackup) {
+                        const filePath = path.join(defaultDir, fileName);
+                        if (fs.existsSync(filePath)) {
+                            try {
+                                const content = await fs.readFile(filePath);
+                                browserFiles[fileName] = content.toString('base64');
+                            } catch (err) { }
+                        }
+                    }
+                    if (Object.keys(browserFiles).length > 0) {
+                        backupData.browserData[profile.id] = browserFiles;
+                    }
+                }
+            }
+        }
+
+        // Compress and encrypt
+        const jsonStr = JSON.stringify(backupData);
+        const compressed = await gzip(Buffer.from(jsonStr, 'utf8'));
+        const encrypted = encryptData(compressed, password);
+
+        return {
+            success: true,
+            data: encrypted.toString('base64'),
+            filename: `GeekEZ_FullBackup_${Date.now()}.geekez`,
+            profileCount: profiles.length
+        };
+    }
+
+    // GET /api/export/fingerprint - Export YAML fingerprints
+    if (method === 'GET' && pathname === '/api/export/fingerprint') {
+        const exportData = profiles.map(p => ({
+            id: p.id,
+            name: p.name,
+            proxyStr: p.proxyStr,
+            tags: p.tags,
+            fingerprint: cleanFingerprint ? cleanFingerprint(p.fingerprint) : p.fingerprint
+        }));
+        const yamlStr = yaml.dump(exportData, { lineWidth: -1, noRefs: true });
+        return {
+            success: true,
+            data: yamlStr,
+            filename: `GeekEZ_Profiles_${Date.now()}.yaml`,
+            profileCount: profiles.length
+        };
+    }
+
+    // POST /api/import - Import backup (YAML or encrypted)
+    if (method === 'POST' && pathname === '/api/import') {
+        try {
+            const data = JSON.parse(body);
+            const content = data.content;
+            const password = data.password;
+
+            if (!content) return { status: 400, data: { success: false, error: 'Content required' } };
+
+            // Try YAML first
+            try {
+                const yamlData = yaml.load(content);
+                if (Array.isArray(yamlData)) {
+                    let imported = 0;
+                    for (const item of yamlData) {
+                        const name = generateUniqueName(item.name || `Imported-${Date.now()}`);
+                        const newProfile = {
+                            id: uuidv4(),
+                            name,
+                            proxyStr: item.proxyStr || '',
+                            tags: item.tags || [],
+                            fingerprint: item.fingerprint || await generateFingerprint({}),
+                            createdAt: Date.now()
+                        };
+                        profiles.push(newProfile);
+                        imported++;
+                    }
+                    await fs.writeJson(PROFILES_FILE, profiles);
+                    notifyUIRefresh(); // Notify UI to refresh
+                    return { success: true, message: `Imported ${imported} profiles from YAML`, count: imported };
+                }
+            } catch (yamlErr) { }
+
+            // Try encrypted backup
+            if (!password) return { status: 400, data: { success: false, error: 'Password required for encrypted backup' } };
+
+            try {
+                const encrypted = Buffer.from(content, 'base64');
+                const decrypted = decryptData(encrypted, password);
+                const decompressed = await gunzip(decrypted);
+                const backupData = JSON.parse(decompressed.toString('utf8'));
+
+                let imported = 0;
+                for (const profile of backupData.profiles || []) {
+                    const name = generateUniqueName(profile.name);
+                    const newProfile = { ...profile, id: uuidv4(), name };
+                    profiles.push(newProfile);
+                    imported++;
+                }
+                await fs.writeJson(PROFILES_FILE, profiles);
+                notifyUIRefresh(); // Notify UI to refresh
+                return { success: true, message: `Imported ${imported} profiles from backup`, count: imported };
+            } catch (decryptErr) {
+                return { status: 400, data: { success: false, error: 'Invalid password or corrupted backup' } };
+            }
+        } catch (err) {
+            return { status: 400, data: { success: false, error: err.message } };
+        }
+    }
+
+    return { status: 404, data: { success: false, error: 'Endpoint not found' } };
+}
+
+// API Server IPC handlers
+ipcMain.handle('start-api-server', async (e, { port }) => {
+    if (apiServerRunning) {
+        return { success: false, error: 'API server already running' };
+    }
+    try {
+        apiServer = createApiServer(port);
+        await new Promise((resolve, reject) => {
+            apiServer.listen(port, '127.0.0.1', () => resolve());
+            apiServer.on('error', reject);
+        });
+        apiServerRunning = true;
+        console.log(`🔌 API Server started on http://localhost:${port}`);
+        return { success: true, port };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+});
+
+ipcMain.handle('stop-api-server', async () => {
+    if (!apiServer) return { success: true };
+    return new Promise(resolve => {
+        apiServer.close(() => {
+            apiServer = null;
+            apiServerRunning = false;
+            console.log('🔌 API Server stopped');
+            resolve({ success: true });
+        });
+    });
+});
+
+ipcMain.handle('get-api-status', () => {
+    return { running: apiServerRunning };
+});
+
 
 function forceKill(pid) {
     return new Promise((resolve) => {
@@ -529,7 +880,15 @@ function createWindow() {
     });
     win.setMenuBarVisibility(false);
     win.loadFile('index.html');
+    mainWindow = win; // Store global reference for API
     return win;
+}
+
+// Helper to notify UI to refresh profiles
+function notifyUIRefresh() {
+    if (mainWindow && mainWindow.webContents) {
+        mainWindow.webContents.send('refresh-profiles');
+    }
 }
 
 async function generateExtension(profilePath, fingerprint, profileName, watermarkStyle) {
@@ -1377,7 +1736,7 @@ ipcMain.handle('test-proxy-latency', async (e, proxyStr) => {
     }
 });
 ipcMain.handle('set-title-bar-color', (e, colors) => { const win = BrowserWindow.fromWebContents(e.sender); if (win) { if (process.platform === 'win32') try { win.setTitleBarOverlay({ color: colors.bg, symbolColor: colors.symbol }); } catch (e) { } win.setBackgroundColor(colors.bg); } });
-ipcMain.handle('check-app-update', async () => { try { const data = await fetchJson('https://api.github.com/repos/EchoHS/GeekezBrowser/releases/latest'); if (!data || !data.tag_name) return { update: false }; const remote = data.tag_name.replace('v', ''); if (compareVersions(remote, app.getVersion()) > 0) { return { update: true, remote, url: data.html_url }; } return { update: false }; } catch (e) { return { update: false, error: e.message }; } });
+ipcMain.handle('check-app-update', async () => { try { const data = await fetchJson('https://api.github.com/repos/EchoHS/GeekezBrowser/releases/latest'); if (!data || !data.tag_name) return { update: false }; const remote = data.tag_name.replace('v', ''); if (compareVersions(remote, app.getVersion()) > 0) { return { update: true, remote, url: 'https://browser.geekez.net/#downloads' }; } return { update: false }; } catch (e) { return { update: false, error: e.message }; } });
 ipcMain.handle('check-xray-update', async () => { try { const data = await fetchJson('https://api.github.com/repos/XTLS/Xray-core/releases/latest'); if (!data || !data.tag_name) return { update: false }; const remoteVer = data.tag_name; const currentVer = await getLocalXrayVersion(); if (remoteVer !== currentVer) { let assetName = ''; const arch = os.arch(); const platform = os.platform(); if (platform === 'win32') assetName = `Xray-windows-${arch === 'x64' ? '64' : '32'}.zip`; else if (platform === 'darwin') assetName = `Xray-macos-${arch === 'arm64' ? 'arm64-v8a' : '64'}.zip`; else assetName = `Xray-linux-${arch === 'x64' ? '64' : '32'}.zip`; const downloadUrl = `https://gh-proxy.com/https://github.com/XTLS/Xray-core/releases/download/${remoteVer}/${assetName}`; return { update: true, remote: remoteVer.replace(/^v/, ''), downloadUrl }; } return { update: false }; } catch (e) { return { update: false }; } });
 ipcMain.handle('download-xray-update', async (e, url) => {
     const exeName = process.platform === 'win32' ? 'xray.exe' : 'xray';
@@ -1614,8 +1973,489 @@ ipcMain.handle('get-user-extensions', async () => {
     return settings.userExtensions || [];
 });
 ipcMain.handle('open-url', async (e, url) => { await shell.openExternal(url); });
-ipcMain.handle('export-data', async (e, type) => { const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : []; const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] }; let exportObj = {}; if (type === 'all' || type === 'profiles') exportObj.profiles = profiles; if (type === 'all' || type === 'proxies') { exportObj.preProxies = settings.preProxies || []; exportObj.subscriptions = settings.subscriptions || []; } if (Object.keys(exportObj).length === 0) return false; const { filePath } = await dialog.showSaveDialog({ title: 'Export Data', defaultPath: `GeekEZ_Backup_${type}_${Date.now()}.yaml`, filters: [{ name: 'YAML', extensions: ['yml', 'yaml'] }] }); if (filePath) { await fs.writeFile(filePath, yaml.dump(exportObj)); return true; } return false; });
-ipcMain.handle('import-data', async () => { const { filePaths } = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: 'YAML', extensions: ['yml', 'yaml'] }] }); if (filePaths && filePaths.length > 0) { try { const content = await fs.readFile(filePaths[0], 'utf8'); const data = yaml.load(content); let updated = false; if (data.profiles || data.preProxies || data.subscriptions) { if (Array.isArray(data.profiles)) { const currentProfiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : []; data.profiles.forEach(p => { const idx = currentProfiles.findIndex(cp => cp.id === p.id); if (idx > -1) currentProfiles[idx] = p; else { if (!p.id) p.id = uuidv4(); currentProfiles.push(p); } }); await fs.writeJson(PROFILES_FILE, currentProfiles); updated = true; } if (Array.isArray(data.preProxies) || Array.isArray(data.subscriptions)) { const currentSettings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] }; if (data.preProxies) { if (!currentSettings.preProxies) currentSettings.preProxies = []; data.preProxies.forEach(p => { if (!currentSettings.preProxies.find(cp => cp.id === p.id)) currentSettings.preProxies.push(p); }); } if (data.subscriptions) { if (!currentSettings.subscriptions) currentSettings.subscriptions = []; data.subscriptions.forEach(s => { if (!currentSettings.subscriptions.find(cs => cs.id === s.id)) currentSettings.subscriptions.push(s); }); } await fs.writeJson(SETTINGS_FILE, currentSettings); updated = true; } } else if (data.name && data.proxyStr && data.fingerprint) { const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : []; const newProfile = { ...data, id: uuidv4(), isSetup: false, createdAt: Date.now() }; profiles.push(newProfile); await fs.writeJson(PROFILES_FILE, profiles); updated = true; } return updated; } catch (e) { console.error(e); throw e; } } return false; });
+
+// --- 自定义数据目录 ---
+ipcMain.handle('get-data-path-info', async () => {
+    return {
+        currentPath: DATA_PATH,
+        defaultPath: DEFAULT_DATA_PATH,
+        isCustom: DATA_PATH !== DEFAULT_DATA_PATH
+    };
+});
+
+ipcMain.handle('select-data-directory', async () => {
+    const { filePaths } = await dialog.showOpenDialog({
+        properties: ['openDirectory', 'createDirectory'],
+        title: 'Select Data Directory'
+    });
+    return filePaths && filePaths.length > 0 ? filePaths[0] : null;
+});
+
+ipcMain.handle('set-data-directory', async (e, { newPath, migrate }) => {
+    try {
+        // 验证路径
+        if (!newPath) {
+            return { success: false, error: 'Invalid path' };
+        }
+
+        // 确保目录存在
+        await fs.ensureDir(newPath);
+
+        // 检查是否有写入权限
+        const testFile = path.join(newPath, '.geekez-test');
+        try {
+            await fs.writeFile(testFile, 'test');
+            await fs.remove(testFile);
+        } catch (e) {
+            return { success: false, error: 'No write permission to selected directory' };
+        }
+
+        // 如果需要迁移数据
+        if (migrate && DATA_PATH !== newPath) {
+            const oldProfiles = path.join(DATA_PATH, 'profiles.json');
+            const oldSettings = path.join(DATA_PATH, 'settings.json');
+
+            // 迁移 profiles.json
+            if (fs.existsSync(oldProfiles)) {
+                await fs.copy(oldProfiles, path.join(newPath, 'profiles.json'));
+            }
+            // 迁移 settings.json
+            if (fs.existsSync(oldSettings)) {
+                await fs.copy(oldSettings, path.join(newPath, 'settings.json'));
+            }
+
+            // 迁移所有环境数据目录
+            const profiles = fs.existsSync(oldProfiles) ? await fs.readJson(oldProfiles) : [];
+            for (const profile of profiles) {
+                const oldDir = path.join(DATA_PATH, profile.id);
+                const newDir = path.join(newPath, profile.id);
+                if (fs.existsSync(oldDir)) {
+                    console.log(`Migrating profile ${profile.id}...`);
+                    await fs.copy(oldDir, newDir);
+                }
+            }
+        }
+
+        // 保存新路径到配置
+        await fs.writeJson(APP_CONFIG_FILE, { customDataPath: newPath });
+
+        return { success: true, requiresRestart: true };
+    } catch (err) {
+        console.error('Failed to set data directory:', err);
+        return { success: false, error: err.message };
+    }
+});
+
+ipcMain.handle('reset-data-directory', async () => {
+    try {
+        // 删除自定义配置
+        if (fs.existsSync(APP_CONFIG_FILE)) {
+            const config = await fs.readJson(APP_CONFIG_FILE);
+            delete config.customDataPath;
+            await fs.writeJson(APP_CONFIG_FILE, config);
+        }
+        return { success: true, requiresRestart: true };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+});
+
+// --- 导出/导入功能 (重构版) ---
+
+// 辅助函数：清理 fingerprint 中的无用字段
+function cleanFingerprint(fp) {
+    if (!fp) return fp;
+    const cleaned = { ...fp };
+    delete cleaned.userAgent;
+    delete cleaned.userAgentMetadata;
+    delete cleaned.webgl;
+    return cleaned;
+}
+
+// 加密辅助函数
+const ENCRYPTION_ALGORITHM = 'aes-256-gcm';
+const PBKDF2_ITERATIONS = 100000;
+const SALT_LENGTH = 16;
+const IV_LENGTH = 12;
+const AUTH_TAG_LENGTH = 16;
+const MAGIC_HEADER = Buffer.from('GKEZ'); // GeekEZ magic bytes
+
+function deriveKey(password, salt) {
+    return crypto.pbkdf2Sync(password, salt, PBKDF2_ITERATIONS, 32, 'sha256');
+}
+
+function encryptData(data, password) {
+    const salt = crypto.randomBytes(SALT_LENGTH);
+    const iv = crypto.randomBytes(IV_LENGTH);
+    const key = deriveKey(password, salt);
+
+    const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM, key, iv);
+    const encrypted = Buffer.concat([cipher.update(data), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+
+    // 格式: MAGIC(4) + VERSION(4) + SALT(16) + IV(12) + AUTH_TAG(16) + ENCRYPTED_DATA
+    const version = Buffer.alloc(4);
+    version.writeUInt32LE(1, 0); // Version 1
+
+    return Buffer.concat([MAGIC_HEADER, version, salt, iv, authTag, encrypted]);
+}
+
+function decryptData(encryptedBuffer, password) {
+    // 验证 magic header
+    const magic = encryptedBuffer.slice(0, 4);
+    if (!magic.equals(MAGIC_HEADER)) {
+        throw new Error('Invalid backup file format');
+    }
+
+    let offset = 4;
+    const version = encryptedBuffer.readUInt32LE(offset);
+    offset += 4;
+
+    if (version !== 1) {
+        throw new Error(`Unsupported backup version: ${version}`);
+    }
+
+    const salt = encryptedBuffer.slice(offset, offset + SALT_LENGTH);
+    offset += SALT_LENGTH;
+
+    const iv = encryptedBuffer.slice(offset, offset + IV_LENGTH);
+    offset += IV_LENGTH;
+
+    const authTag = encryptedBuffer.slice(offset, offset + AUTH_TAG_LENGTH);
+    offset += AUTH_TAG_LENGTH;
+
+    const encrypted = encryptedBuffer.slice(offset);
+
+    const key = deriveKey(password, salt);
+    const decipher = crypto.createDecipheriv(ENCRYPTION_ALGORITHM, key, iv);
+    decipher.setAuthTag(authTag);
+
+    return Buffer.concat([decipher.update(encrypted), decipher.final()]);
+}
+
+// 获取用于选择器的环境列表
+ipcMain.handle('get-export-profiles', async () => {
+    const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+    return profiles.map(p => ({ id: p.id, name: p.name, tags: p.tags || [] }));
+});
+
+// 导出选定环境 (精简版，不含浏览器数据)
+ipcMain.handle('export-selected-data', async (e, { type, profileIds }) => {
+    const allProfiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+    const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
+
+    // 过滤选中的环境
+    const selectedProfiles = allProfiles
+        .filter(p => profileIds.includes(p.id))
+        .map(p => ({
+            ...p,
+            fingerprint: cleanFingerprint(p.fingerprint)
+        }));
+
+    let exportObj = {};
+
+    if (type === 'all' || type === 'profiles') {
+        exportObj.profiles = selectedProfiles;
+    }
+    if (type === 'all' || type === 'proxies') {
+        exportObj.preProxies = settings.preProxies || [];
+        exportObj.subscriptions = settings.subscriptions || [];
+    }
+
+    if (Object.keys(exportObj).length === 0) return { success: false, error: 'No data to export' };
+
+    const typeNames = { all: 'profiles', profiles: 'profiles', proxies: 'proxies' };
+    const { filePath } = await dialog.showSaveDialog({
+        title: 'Export Data',
+        defaultPath: `GeekEZ_Backup_${typeNames[type] || type}_${Date.now()}.yaml`,
+        filters: [{ name: 'YAML', extensions: ['yml', 'yaml'] }]
+    });
+
+    if (filePath) {
+        await fs.writeFile(filePath, yaml.dump(exportObj));
+        return { success: true, count: selectedProfiles.length };
+    }
+    return { success: false, cancelled: true };
+});
+
+// 完整备份 (含浏览器数据，加密)
+ipcMain.handle('export-full-backup', async (e, { profileIds, password }) => {
+    try {
+        const allProfiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+        const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
+
+        // 过滤选中的环境
+        const selectedProfiles = allProfiles
+            .filter(p => profileIds.includes(p.id))
+            .map(p => ({
+                ...p,
+                fingerprint: cleanFingerprint(p.fingerprint)
+            }));
+
+        // 准备备份数据
+        const backupData = {
+            version: 1,
+            createdAt: Date.now(),
+            profiles: selectedProfiles,
+            preProxies: settings.preProxies || [],
+            subscriptions: settings.subscriptions || [],
+            browserData: {}
+        };
+
+        // 收集浏览器数据
+        // 浏览器数据存储在 DATA_PATH/<profileId>/browser_data/Default/
+        for (const profile of selectedProfiles) {
+            const profileDataDir = path.join(DATA_PATH, profile.id, 'browser_data');
+            if (fs.existsSync(profileDataDir)) {
+                const defaultDir = path.join(profileDataDir, 'Default');
+                if (fs.existsSync(defaultDir)) {
+                    const browserFiles = {};
+
+                    // 收集关键浏览器数据文件
+                    const filesToBackup = ['Bookmarks', 'Cookies', 'Login Data', 'Web Data', 'Preferences'];
+                    for (const fileName of filesToBackup) {
+                        const filePath = path.join(defaultDir, fileName);
+                        if (fs.existsSync(filePath)) {
+                            try {
+                                const content = await fs.readFile(filePath);
+                                browserFiles[fileName] = content.toString('base64');
+                            } catch (err) {
+                                console.error(`Failed to read ${fileName} for ${profile.id}:`, err.message);
+                            }
+                        }
+                    }
+
+                    // 收集 Local Storage
+                    const localStorageDir = path.join(defaultDir, 'Local Storage', 'leveldb');
+                    if (fs.existsSync(localStorageDir)) {
+                        try {
+                            const lsFiles = await fs.readdir(localStorageDir);
+                            const localStorageData = {};
+                            for (const lsFile of lsFiles) {
+                                if (lsFile.endsWith('.ldb') || lsFile.endsWith('.log')) {
+                                    const lsFilePath = path.join(localStorageDir, lsFile);
+                                    const content = await fs.readFile(lsFilePath);
+                                    localStorageData[lsFile] = content.toString('base64');
+                                }
+                            }
+                            if (Object.keys(localStorageData).length > 0) {
+                                browserFiles['LocalStorage'] = localStorageData;
+                            }
+                        } catch (err) {
+                            console.error(`Failed to read LocalStorage for ${profile.id}:`, err.message);
+                        }
+                    }
+
+                    if (Object.keys(browserFiles).length > 0) {
+                        backupData.browserData[profile.id] = browserFiles;
+                    }
+                }
+            }
+        }
+
+        // 压缩并加密
+        const jsonData = JSON.stringify(backupData);
+        const compressed = await gzip(Buffer.from(jsonData, 'utf8'));
+        const encrypted = encryptData(compressed, password);
+
+        const { filePath } = await dialog.showSaveDialog({
+            title: 'Export Full Backup',
+            defaultPath: `GeekEZ_FullBackup_${Date.now()}.geekez`,
+            filters: [{ name: 'GeekEZ Backup', extensions: ['geekez'] }]
+        });
+
+        if (filePath) {
+            await fs.writeFile(filePath, encrypted);
+            return { success: true, count: selectedProfiles.length };
+        }
+        return { success: false, cancelled: true };
+    } catch (err) {
+        console.error('Full backup failed:', err);
+        return { success: false, error: err.message };
+    }
+});
+
+// 导入完整备份
+ipcMain.handle('import-full-backup', async (e, { password }) => {
+    try {
+        const { filePaths } = await dialog.showOpenDialog({
+            properties: ['openFile'],
+            filters: [{ name: 'GeekEZ Backup', extensions: ['geekez'] }]
+        });
+
+        if (!filePaths || filePaths.length === 0) {
+            return { success: false, cancelled: true };
+        }
+
+        const encrypted = await fs.readFile(filePaths[0]);
+        const decrypted = decryptData(encrypted, password);
+        const decompressed = await gunzip(decrypted);
+        const backupData = JSON.parse(decompressed.toString('utf8'));
+
+        if (backupData.version !== 1) {
+            throw new Error(`Unsupported backup version: ${backupData.version}`);
+        }
+
+        // 还原 profiles
+        const currentProfiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+        let importedCount = 0;
+
+        for (const profile of backupData.profiles) {
+            const idx = currentProfiles.findIndex(cp => cp.id === profile.id);
+            if (idx > -1) {
+                currentProfiles[idx] = profile;
+            } else {
+                currentProfiles.push(profile);
+            }
+            importedCount++;
+        }
+        await fs.writeJson(PROFILES_FILE, currentProfiles);
+
+        // 还原代理和订阅
+        const currentSettings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
+        if (backupData.preProxies) {
+            if (!currentSettings.preProxies) currentSettings.preProxies = [];
+            for (const p of backupData.preProxies) {
+                if (!currentSettings.preProxies.find(cp => cp.id === p.id)) {
+                    currentSettings.preProxies.push(p);
+                }
+            }
+        }
+        if (backupData.subscriptions) {
+            if (!currentSettings.subscriptions) currentSettings.subscriptions = [];
+            for (const s of backupData.subscriptions) {
+                if (!currentSettings.subscriptions.find(cs => cs.id === s.id)) {
+                    currentSettings.subscriptions.push(s);
+                }
+            }
+        }
+        await fs.writeJson(SETTINGS_FILE, currentSettings);
+
+        // 还原浏览器数据
+        // 浏览器数据存储在 DATA_PATH/<profileId>/browser_data/Default/
+        for (const [profileId, browserFiles] of Object.entries(backupData.browserData || {})) {
+            const profileDataDir = path.join(DATA_PATH, profileId, 'browser_data');
+            const defaultDir = path.join(profileDataDir, 'Default');
+            await fs.ensureDir(defaultDir);
+
+            for (const [fileName, content] of Object.entries(browserFiles)) {
+                if (fileName === 'LocalStorage') {
+                    // 还原 Local Storage
+                    const localStorageDir = path.join(defaultDir, 'Local Storage', 'leveldb');
+                    await fs.ensureDir(localStorageDir);
+                    for (const [lsFileName, lsContent] of Object.entries(content)) {
+                        const lsFilePath = path.join(localStorageDir, lsFileName);
+                        await fs.writeFile(lsFilePath, Buffer.from(lsContent, 'base64'));
+                    }
+                } else {
+                    // 还原普通文件
+                    const filePath = path.join(defaultDir, fileName);
+                    await fs.writeFile(filePath, Buffer.from(content, 'base64'));
+                }
+            }
+        }
+
+        return { success: true, count: importedCount };
+    } catch (err) {
+        console.error('Import full backup failed:', err);
+        if (err.message.includes('Unsupported state') || err.message.includes('bad decrypt')) {
+            return { success: false, error: '密码错误或文件已损坏' };
+        }
+        return { success: false, error: err.message };
+    }
+});
+
+// 导入普通备份 (YAML)
+ipcMain.handle('import-data', async () => {
+    const { filePaths } = await dialog.showOpenDialog({
+        properties: ['openFile'],
+        filters: [{ name: 'YAML', extensions: ['yml', 'yaml'] }]
+    });
+
+    if (filePaths && filePaths.length > 0) {
+        try {
+            const content = await fs.readFile(filePaths[0], 'utf8');
+            const data = yaml.load(content);
+            let updated = false;
+
+            if (data.profiles || data.preProxies || data.subscriptions) {
+                if (Array.isArray(data.profiles)) {
+                    const currentProfiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+                    data.profiles.forEach(p => {
+                        const idx = currentProfiles.findIndex(cp => cp.id === p.id);
+                        if (idx > -1) currentProfiles[idx] = p;
+                        else {
+                            if (!p.id) p.id = uuidv4();
+                            currentProfiles.push(p);
+                        }
+                    });
+                    await fs.writeJson(PROFILES_FILE, currentProfiles);
+                    updated = true;
+                }
+                if (Array.isArray(data.preProxies) || Array.isArray(data.subscriptions)) {
+                    const currentSettings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
+                    if (data.preProxies) {
+                        if (!currentSettings.preProxies) currentSettings.preProxies = [];
+                        data.preProxies.forEach(p => {
+                            if (!currentSettings.preProxies.find(cp => cp.id === p.id)) currentSettings.preProxies.push(p);
+                        });
+                    }
+                    if (data.subscriptions) {
+                        if (!currentSettings.subscriptions) currentSettings.subscriptions = [];
+                        data.subscriptions.forEach(s => {
+                            if (!currentSettings.subscriptions.find(cs => cs.id === s.id)) currentSettings.subscriptions.push(s);
+                        });
+                    }
+                    await fs.writeJson(SETTINGS_FILE, currentSettings);
+                    updated = true;
+                }
+            } else if (data.name && data.proxyStr && data.fingerprint) {
+                // 单个环境导入
+                const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+                const newProfile = { ...data, id: uuidv4(), isSetup: false, createdAt: Date.now() };
+                profiles.push(newProfile);
+                await fs.writeJson(PROFILES_FILE, profiles);
+                updated = true;
+            }
+            return updated;
+        } catch (e) {
+            console.error(e);
+            throw e;
+        }
+    }
+    return false;
+});
+
+// 保留旧的 export-data 用于向后兼容 (deprecated)
+ipcMain.handle('export-data', async (e, type) => {
+    const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
+    const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
+
+    // 清理 fingerprint
+    const cleanedProfiles = profiles.map(p => ({
+        ...p,
+        fingerprint: cleanFingerprint(p.fingerprint)
+    }));
+
+    let exportObj = {};
+    if (type === 'all' || type === 'profiles') exportObj.profiles = cleanedProfiles;
+    if (type === 'all' || type === 'proxies') {
+        exportObj.preProxies = settings.preProxies || [];
+        exportObj.subscriptions = settings.subscriptions || [];
+    }
+    if (Object.keys(exportObj).length === 0) return false;
+
+    const { filePath } = await dialog.showSaveDialog({
+        title: 'Export Data',
+        defaultPath: `GeekEZ_Backup_${type}_${Date.now()}.yaml`,
+        filters: [{ name: 'YAML', extensions: ['yml', 'yaml'] }]
+    });
+    if (filePath) {
+        await fs.writeFile(filePath, yaml.dump(exportObj));
+        return true;
+    }
+    return false;
+});
 
 // --- 核心启动逻辑 ---
 async function launchProfileInternal(profileId, watermarkStyle, sender, options = {}) {
@@ -1832,6 +2672,18 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         }
 
+        // 6. Custom Launch Arguments (if enabled)
+        if (settings.enableCustomArgs && profile.customArgs) {
+            const customArgsList = profile.customArgs
+                .split(/[\n\s]+/)
+                .map(arg => arg.trim())
+                .filter(arg => arg && arg.startsWith('--'));
+
+            if (customArgsList.length > 0) {
+                launchArgs.push(...customArgsList);
+                console.log('⚡ Custom Args:', customArgsList.join(' '));
+            }
+        }
 
         // 5. 启动浏览器
         const chromePath = getChromiumPath();
