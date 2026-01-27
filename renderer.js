@@ -1,4 +1,4 @@
-﻿// i18n structure moved to i18n.js and locales/
+// i18n structure moved to i18n.js and locales/
 
 let globalSettings = { preProxies: [], subscriptions: [], mode: 'single', enablePreProxy: false };
 let currentEditId = null;
@@ -737,9 +737,172 @@ async function openEditModal(id) {
         debugPortSection.style.display = 'none';
     }
 
+    // Load fingerprint tab data
+    loadFingerprintTab(fp);
+    window._editFontsTemp = null; // Reset temp fonts
+    
+    // Initialize fingerprint button groups
+    initFpButtonGroups();
+
+    // Reset to basic tab
+    document.querySelectorAll('#editModal .tab-btn').forEach((btn, i) => {
+        btn.classList.toggle('active', i === 0);
+    });
+    document.getElementById('edit-tab-basic').style.display = 'block';
+    document.getElementById('edit-tab-fingerprint').style.display = 'none';
+
     document.getElementById('editModal').style.display = 'flex';
 }
-function closeEditModal() { document.getElementById('editModal').style.display = 'none'; currentEditId = null; }
+function closeEditModal() { 
+    document.getElementById('editModal').style.display = 'none'; 
+    currentEditId = null;
+    // Reset to basic tab (directly, without using event)
+    document.querySelectorAll('#editModal .tab-btn').forEach((btn, i) => {
+        btn.classList.toggle('active', i === 0);
+    });
+    document.getElementById('edit-tab-basic').style.display = 'block';
+    document.getElementById('edit-tab-fingerprint').style.display = 'none';
+}
+
+// Edit Modal Tab Switching
+function switchEditTab(tabName) {
+    // Update tab buttons
+    document.querySelectorAll('#editModal .tab-btn').forEach((btn, i) => {
+        btn.classList.toggle('active', (tabName === 'basic' && i === 0) || (tabName === 'fingerprint' && i === 1));
+    });
+
+    // Update tab content
+    document.querySelectorAll('.edit-tab-section').forEach(section => {
+        section.style.display = 'none';
+    });
+    document.getElementById('edit-tab-' + tabName).style.display = 'block';
+}
+
+// Load fingerprint data into the fingerprint tab
+function loadFingerprintTab(fp) {
+    // User Agent
+    document.getElementById('editUserAgent').value = fp.userAgent || '';
+    
+    // WebGL
+    const webgl = fp.webgl || {};
+    document.getElementById('editWebGLVendor').value = webgl.vendor || 'Google Inc.';
+    document.getElementById('editWebGLRenderer').value = webgl.renderer || 'ANGLE (NVIDIA)';
+    
+    // Hardware
+    document.getElementById('editHardwareConcurrency').value = fp.hardwareConcurrency || 8;
+    document.getElementById('editDeviceMemory').value = fp.deviceMemory || 8;
+    document.getElementById('editColorDepth').value = fp.colorDepth || 24;
+    document.getElementById('editPixelRatio').value = fp.pixelRatio || 1;
+    document.getElementById('editMaxTouchPoints').value = fp.maxTouchPoints !== undefined ? fp.maxTouchPoints : 0;
+    document.getElementById('editDoNotTrack').value = fp.doNotTrack !== undefined ? String(fp.doNotTrack) : 'null';
+    
+    // Network
+    const conn = fp.connection || {};
+    document.getElementById('editConnectionType').value = conn.type || 'wifi';
+    document.getElementById('editEffectiveType').value = conn.effectiveType || '4g';
+    document.getElementById('editDownlink').value = conn.downlink || 10;
+    document.getElementById('editRTT').value = conn.rtt || 50;
+    
+    // Fonts
+    renderFontsPreview(fp.fonts || []);
+    
+    // Protection settings (button groups)
+    loadProtectionSettings(fp);
+}
+
+// Render fonts preview as tags
+function renderFontsPreview(fonts) {
+    const container = document.getElementById('editFontsPreview');
+    if (!container) return;
+    container.innerHTML = fonts.map(font => 
+        `<span class="fp-font-tag">${font}</span>`
+    ).join('');
+}
+
+// Regenerate User Agent
+async function regenerateUserAgent() {
+    const newFp = await window.electronAPI.invoke('generate-fingerprint');
+    if (newFp && newFp.userAgent) {
+        document.getElementById('editUserAgent').value = newFp.userAgent;
+        showAlert(t('fpRegenerated') || 'User Agent regenerated');
+    }
+}
+
+// Regenerate WebGL
+async function regenerateWebGL() {
+    const newFp = await window.electronAPI.invoke('generate-fingerprint');
+    if (newFp && newFp.webgl) {
+        document.getElementById('editWebGLVendor').value = newFp.webgl.vendor;
+        document.getElementById('editWebGLRenderer').value = newFp.webgl.renderer;
+        showAlert(t('fpRegenerated') || 'WebGL regenerated');
+    }
+}
+
+// Regenerate Hardware
+async function regenerateHardware() {
+    const newFp = await window.electronAPI.invoke('generate-fingerprint');
+    if (newFp) {
+        document.getElementById('editHardwareConcurrency').value = newFp.hardwareConcurrency;
+        document.getElementById('editDeviceMemory').value = newFp.deviceMemory;
+        showAlert(t('fpRegenerated') || 'Hardware regenerated');
+    }
+}
+
+// Regenerate Fonts
+async function regenerateFonts() {
+    const newFp = await window.electronAPI.invoke('generate-fingerprint');
+    if (newFp && newFp.fonts) {
+        renderFontsPreview(newFp.fonts);
+        // Store in a temp variable for saving
+        window._editFontsTemp = newFp.fonts;
+        showAlert(t('fpRegenerated') || 'Fonts regenerated');
+    }
+}
+
+// Initialize fingerprint button groups
+function initFpButtonGroups() {
+    document.querySelectorAll('.fp-btn-group').forEach(group => {
+        group.querySelectorAll('.fp-btn').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                e.preventDefault();
+                // Remove active from siblings
+                this.parentElement.querySelectorAll('.fp-btn').forEach(b => b.classList.remove('active'));
+                // Add active to clicked
+                this.classList.add('active');
+            });
+        });
+    });
+}
+
+// Load protection settings into button groups
+function loadProtectionSettings(fp) {
+    const settings = fp.protection || {};
+    
+    const fields = ['canvasNoise', 'webglNoise', 'clientRects', 'audioNoise', 'speechVoices', 'mediaDevices', 'portScanProtection', 'webrtcMode'];
+    
+    fields.forEach(field => {
+        const value = settings[field] !== undefined ? settings[field] : 'on';
+        const btns = document.querySelectorAll(`.fp-btn[data-field="${field}"]`);
+        btns.forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.value === value);
+        });
+    });
+}
+
+// Get protection settings from button groups
+function getProtectionSettings() {
+    const settings = {};
+    const fields = ['canvasNoise', 'webglNoise', 'clientRects', 'audioNoise', 'speechVoices', 'mediaDevices', 'portScanProtection', 'webrtcMode'];
+    
+    fields.forEach(field => {
+        const activeBtn = document.querySelector(`.fp-btn[data-field="${field}"].active`);
+        if (activeBtn) {
+            settings[field] = activeBtn.dataset.value;
+        }
+    });
+    
+    return settings;
+}
 async function saveEditProfile() {
     console.log('[saveEditProfile] Called, currentEditId:', currentEditId);
     if (!currentEditId) return;
@@ -783,6 +946,46 @@ async function saveEditProfile() {
             const portValue = debugPortInput.value.trim();
             p.debugPort = portValue ? parseInt(portValue) : null;
         }
+
+        // Save fingerprint tab data
+        // User Agent
+        const userAgentValue = document.getElementById('editUserAgent').value;
+        if (userAgentValue) {
+            p.fingerprint.userAgent = userAgentValue;
+        }
+        
+        // WebGL
+        p.fingerprint.webgl = {
+            vendor: document.getElementById('editWebGLVendor').value,
+            renderer: document.getElementById('editWebGLRenderer').value
+        };
+        
+        // Hardware
+        p.fingerprint.hardwareConcurrency = parseInt(document.getElementById('editHardwareConcurrency').value);
+        p.fingerprint.deviceMemory = parseInt(document.getElementById('editDeviceMemory').value);
+        p.fingerprint.colorDepth = parseInt(document.getElementById('editColorDepth').value);
+        p.fingerprint.pixelRatio = parseFloat(document.getElementById('editPixelRatio').value);
+        p.fingerprint.maxTouchPoints = parseInt(document.getElementById('editMaxTouchPoints').value);
+        
+        const dntValue = document.getElementById('editDoNotTrack').value;
+        p.fingerprint.doNotTrack = dntValue === 'null' ? null : parseInt(dntValue);
+        
+        // Network
+        p.fingerprint.connection = {
+            type: document.getElementById('editConnectionType').value,
+            effectiveType: document.getElementById('editEffectiveType').value,
+            downlink: parseInt(document.getElementById('editDownlink').value),
+            rtt: parseInt(document.getElementById('editRTT').value),
+            saveData: false
+        };
+        
+        // Fonts (use temp if regenerated, otherwise keep existing)
+        if (window._editFontsTemp) {
+            p.fingerprint.fonts = window._editFontsTemp;
+        }
+        
+        // Protection settings (from button groups)
+        p.fingerprint.protection = getProtectionSettings();
 
         console.log('[saveEditProfile] Calling updateProfile...');
         await window.electronAPI.updateProfile(p);

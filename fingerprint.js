@@ -2,9 +2,64 @@ const os = require('os');
 
 const RESOLUTIONS = [{ w: 1920, h: 1080 }, { w: 2560, h: 1440 }, { w: 1366, h: 768 }, { w: 1536, h: 864 }, { w: 1440, h: 900 }];
 
+// P0: WebGL 渲染器预设列表（按平台分类）
+const WEBGL_CONFIGS = {
+    win32: [
+        { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1080 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+        { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+        { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 SUPER Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+        { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 580 Series Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+        { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)' }
+    ],
+    darwin: [
+        { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, Apple M1 Pro, OpenGL 4.1)' },
+        { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, Apple M2, OpenGL 4.1)' },
+        { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel Inc., Intel(R) Iris(TM) Plus Graphics 655, OpenGL 4.1)' }
+    ],
+    linux: [
+        { vendor: 'Google Inc. (NVIDIA Corporation)', renderer: 'ANGLE (NVIDIA Corporation, NVIDIA GeForce GTX 1080/PCIe/SSE2, OpenGL 4.6.0)' },
+        { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 620, OpenGL 4.6)' }
+    ]
+};
+
+// P0: 常见字体列表（用于字体指纹伪装，按平台分类）
+const FONT_CONFIGS = {
+    win32: [
+        'Arial', 'Arial Black', 'Arial Narrow', 'Book Antiqua', 'Bookman Old Style',
+        'Calibri', 'Cambria', 'Cambria Math', 'Century', 'Century Gothic',
+        'Comic Sans MS', 'Consolas', 'Courier', 'Courier New', 'Georgia',
+        'Impact', 'Lucida Console', 'Lucida Sans Unicode',
+        'Microsoft Sans Serif', 'Palatino Linotype', 'Segoe UI', 'Tahoma',
+        'Times', 'Times New Roman', 'Trebuchet MS', 'Verdana', 'Wingdings'
+    ],
+    darwin: [
+        'American Typewriter', 'Arial', 'Arial Black', 'Arial Narrow', 'Avenir',
+        'Courier', 'Courier New', 'Georgia', 'Helvetica', 'Helvetica Neue',
+        'Menlo', 'Monaco', 'Optima', 'Palatino', 'Times', 'Times New Roman',
+        'Trebuchet MS', 'Verdana'
+    ],
+    linux: [
+        'DejaVu Sans', 'DejaVu Sans Mono', 'DejaVu Serif',
+        'Liberation Sans', 'Liberation Sans Narrow', 'Liberation Mono', 'Liberation Serif',
+        'Noto Sans', 'Noto Sans Mono', 'Noto Serif',
+        'Ubuntu', 'Ubuntu Condensed', 'Ubuntu Mono',
+        'Cantarell', 'Arial', 'Courier New', 'Times New Roman'
+    ]
+};
+
+const DEFAULT_CHROME_VERSIONS = ['120.0.0.0', '121.0.0.0', '122.0.0.0', '123.0.0.0', '124.0.0.0', '125.0.0.0'];
+const CHROME_VERSION_RE = /^\d+\.\d+\.\d+\.\d+$/;
+
+function resolveChromeVersion(value) {
+    if (typeof value !== 'string') return null;
+    const v = value.trim();
+    if (!CHROME_VERSION_RE.test(v)) return null;
+    return v;
+}
+
 function getRandom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
-function generateFingerprint() {
+function generateFingerprint(options = {}) {
     // 1. 强制匹配宿主机系统和架构
     const platform = os.platform();
     const arch = os.arch(); // 'arm64' for Apple Silicon, 'x64' for Intel
@@ -32,6 +87,28 @@ function generateFingerprint() {
         a: Math.floor(Math.random() * 10) - 5
     };
 
+    // P0: 根据平台选择 WebGL 配置
+    const webglConfigs = WEBGL_CONFIGS[platform] || WEBGL_CONFIGS.win32;
+    const webgl = getRandom(webglConfigs);
+
+    // P0: 随机选择字体子集（模拟不同系统安装的字体）
+    const fontCount = 15 + Math.floor(Math.random() * 10); // 15-24 个字体
+    const fontPool = FONT_CONFIGS[platform] || FONT_CONFIGS.win32;
+    const shuffledFonts = [...fontPool].sort(() => Math.random() - 0.5);
+    const fonts = shuffledFonts.slice(0, Math.min(fontCount, shuffledFonts.length));
+
+    // P1: 生成 User-Agent（根据平台匹配）
+    const forcedChromeVersion = resolveChromeVersion(options.chromeVersion) || resolveChromeVersion(process.env.GEEKEZ_CHROME_VERSION);
+    const chromeVersion = forcedChromeVersion || getRandom(DEFAULT_CHROME_VERSIONS);
+    let userAgent;
+    if (platform === 'win32') {
+        userAgent = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
+    } else if (platform === 'darwin') {
+        userAgent = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
+    } else {
+        userAgent = `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
+    }
+
     return {
         platform: osData.platform,
         screen: { width: res.w, height: res.h },
@@ -42,7 +119,14 @@ function generateFingerprint() {
         canvasNoise: canvasNoise,
         audioNoise: Math.random() * 0.000001,
         noiseSeed: Math.floor(Math.random() * 9999999),
-        timezone: "America/Los_Angeles" // 默认值
+        timezone: "America/Los_Angeles", // 默认值
+        // P0: WebGL 渲染器信息
+        webgl: webgl,
+        // P0: 字体列表
+        fonts: fonts,
+        // P1: User-Agent 和 Chrome 版本
+        userAgent: userAgent,
+        chromeVersion: chromeVersion
     };
 }
 
@@ -56,6 +140,10 @@ function getInjectScript(fp, profileName, watermarkStyle) {
         try {
             const fp = ${fpJson};
             const targetTimezone = fp.timezone || "America/Los_Angeles";
+            
+            // Protection settings (default all enabled)
+            const prot = fp.protection || {};
+            const isEnabled = (key) => prot[key] !== 'off';
 
             // --- Global Helper: makeNative ---
             // Makes hooked functions appear as native code to avoid detection
@@ -340,45 +428,501 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                 Intl.Collator = makeNative(hookedColl, 'Collator');
             }
 
-            // --- 3. Canvas Noise ---
-            const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
-            const hookedGetImageData = function getImageData(x, y, w, h) {
-                const imageData = originalGetImageData.apply(this, arguments);
-                if (fp.noiseSeed) {
-                    for (let i = 0; i < imageData.data.length; i += 4) {
-                        if ((i + fp.noiseSeed) % 53 === 0) {
-                            const noise = fp.canvasNoise ? (fp.canvasNoise.a || 0) : 0;
-                            imageData.data[i+3] = Math.max(0, Math.min(255, imageData.data[i+3] + noise));
-                        }
+            // --- P1: User-Agent 一致性 Hook ---
+            // 确保 navigator.userAgent 等属性与启动参数一致
+            try {
+                if (fp.userAgent) {
+                    const targetUA = fp.userAgent;
+                    Object.defineProperty(Navigator.prototype, 'userAgent', {
+                        get: makeNative(function userAgent() { return targetUA; }, 'userAgent'),
+                        configurable: true
+                    });
+                    Object.defineProperty(Navigator.prototype, 'appVersion', {
+                        get: makeNative(function appVersion() { return targetUA.replace('Mozilla/', ''); }, 'appVersion'),
+                        configurable: true
+                    });
+                    if (fp.platform) {
+                        Object.defineProperty(Navigator.prototype, 'platform', {
+                            get: makeNative(function platform() { return fp.platform; }, 'platform'),
+                            configurable: true
+                        });
                     }
                 }
-                return imageData;
-            };
-            CanvasRenderingContext2D.prototype.getImageData = makeNative(hookedGetImageData, 'getImageData');
+            } catch (e) { }
+
+            // --- P0: WebGL 渲染器伪装 ---
+            // Hook WebGLRenderingContext.getParameter 返回伪造的 GPU 信息
+            try {
+                if (fp.webgl && fp.webgl.vendor && fp.webgl.renderer) {
+                    const webglVendor = fp.webgl.vendor;
+                    const webglRenderer = fp.webgl.renderer;
+
+                    if (typeof WebGLRenderingContext !== 'undefined'
+                        && WebGLRenderingContext.prototype
+                        && typeof WebGLRenderingContext.prototype.getParameter === 'function') {
+                        const origGetParameter = WebGLRenderingContext.prototype.getParameter;
+                        const hookedGetParameter = function getParameter(param) {
+                            if (param === 37445) return webglVendor;
+                            if (param === 37446) return webglRenderer;
+                            return origGetParameter.call(this, param);
+                        };
+                        WebGLRenderingContext.prototype.getParameter = makeNative(hookedGetParameter, 'getParameter');
+                    }
+
+                    if (typeof WebGL2RenderingContext !== 'undefined'
+                        && WebGL2RenderingContext.prototype
+                        && typeof WebGL2RenderingContext.prototype.getParameter === 'function') {
+                        const origGetParameter2 = WebGL2RenderingContext.prototype.getParameter;
+                        const hookedGetParameter2 = function getParameter(param) {
+                            if (param === 37445) return webglVendor;
+                            if (param === 37446) return webglRenderer;
+                            return origGetParameter2.call(this, param);
+                        };
+                        WebGL2RenderingContext.prototype.getParameter = makeNative(hookedGetParameter2, 'getParameter');
+                    }
+                }
+            } catch (e) { }
+
+            // --- P0: 字体指纹伪装 ---
+            // Hook document.fonts.check() 和 Canvas 字体测量
+            try {
+                if (fp.fonts && Array.isArray(fp.fonts) && fp.fonts.length > 0) {
+                    const allowedFonts = fp.fonts.map(f => String(f).toLowerCase());
+                    const genericFonts = ['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded'];
+                    const probeFonts = [
+                        'arial', 'arial black', 'arial narrow', 'calibri', 'cambria', 'cambria math',
+                        'consolas', 'courier', 'courier new', 'georgia', 'helvetica', 'helvetica neue',
+                        'impact', 'lucida console', 'lucida sans unicode', 'microsoft sans serif',
+                        'palatino linotype', 'segoe ui', 'tahoma', 'times', 'times new roman',
+                        'trebuchet ms', 'verdana', 'menlo', 'monaco',
+                        'dejavu sans', 'dejavu sans mono', 'dejavu serif',
+                        'liberation sans', 'liberation mono', 'liberation serif',
+                        'ubuntu', 'ubuntu mono', 'cantarell', 'noto sans', 'noto sans mono', 'noto serif'
+                    ];
+
+                    if (document.fonts && typeof document.fonts.check === 'function') {
+                        const origFontsCheck = document.fonts.check.bind(document.fonts);
+                        const hookedFontsCheck = function check(font, text) {
+                            try {
+                                const fontStr = String(font || '');
+                                const fontMatch = fontStr.match(/['""]?([^'""]+)['""]?\\s*$/);
+                                if (fontMatch) {
+                                    const fontName = fontMatch[1].toLowerCase().trim();
+                                    if (!genericFonts.includes(fontName)) {
+                                        if (!allowedFonts.includes(fontName) && probeFonts.includes(fontName)) return false;
+                                    }
+                                }
+                            } catch (e) { }
+                            return origFontsCheck(font, text);
+                        };
+                        document.fonts.check = makeNative(hookedFontsCheck, 'check');
+                    }
+
+                    if (typeof CanvasRenderingContext2D !== 'undefined'
+                        && CanvasRenderingContext2D.prototype
+                        && typeof CanvasRenderingContext2D.prototype.measureText === 'function') {
+                        const origMeasureText = CanvasRenderingContext2D.prototype.measureText;
+                        const hookedMeasureText = function measureText(text) {
+                            const result = origMeasureText.call(this, text);
+                            try {
+                                const noise = ((fp.noiseSeed || 0) % 100) / 10000;
+                                const originalWidth = result.width;
+                                Object.defineProperty(result, 'width', {
+                                    get: function() { return originalWidth + noise; },
+                                    configurable: true
+                                });
+                            } catch (e) { }
+                            return result;
+                        };
+                        CanvasRenderingContext2D.prototype.measureText = makeNative(hookedMeasureText, 'measureText');
+                    }
+                }
+            } catch (e) { }
+
+            // --- P2: 插件列表伪装 ---
+            // Hook navigator.plugins 返回预设的 Chrome 插件
+            try {
+                (function() {
+                    const basePlugins = Array.isArray(fp.plugins) && fp.plugins.length > 0 ? fp.plugins : [
+                        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format', length: 1 },
+                        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '', length: 1 },
+                        { name: 'Native Client', filename: 'internal-nacl-plugin', description: '', length: 2 }
+                    ];
+
+                    const fakePlugins = basePlugins.map((p) => {
+                        const name = (p && p.name) ? String(p.name) : '';
+                        const filename = (p && p.filename) ? String(p.filename) : '';
+                        const description = (p && p.description) ? String(p.description) : '';
+                        const length = (p && Number.isFinite(p.length)) ? p.length : 1;
+                        const plugin = { name, filename, description, length };
+                        try { Object.defineProperty(plugin, Symbol.toStringTag, { value: 'Plugin', configurable: true }); } catch (e) { }
+                        plugin[0] = { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' };
+                        if (length > 1) plugin[1] = { type: 'application/x-nacl', suffixes: '', description: 'Native Client' };
+                        return plugin;
+                    });
+
+                    const fakePluginArray = {
+                        item: function(i) { return fakePlugins[i] || null; },
+                        namedItem: function(name) { return fakePlugins.find(p => p.name === name) || null; },
+                        refresh: function() {}
+                    };
+                    try {
+                        Object.defineProperty(fakePluginArray, Symbol.toStringTag, { value: 'PluginArray', configurable: true });
+                        fakePluginArray[Symbol.iterator] = function* () { yield* fakePlugins; };
+                    } catch (e) { }
+                    fakePlugins.forEach((p, i) => { fakePluginArray[i] = p; });
+                    try { Object.defineProperty(fakePluginArray, 'length', { value: fakePlugins.length, configurable: true }); } catch (e) { fakePluginArray.length = fakePlugins.length; }
+
+                    try {
+                        Object.defineProperty(Navigator.prototype, 'plugins', {
+                            get: makeNative(function plugins() { return fakePluginArray; }, 'plugins'),
+                            configurable: true
+                        });
+                    } catch (e) { }
+                })();
+            } catch (e) { }
+
+            // --- P2: 媒体设备伪装 ---
+            // Hook navigator.mediaDevices.enumerateDevices 返回虚拟设备
+            try {
+                if (navigator.mediaDevices && typeof navigator.mediaDevices.enumerateDevices === 'function') {
+                    const seededHex = (seed, len) => {
+                        let x = (seed >>> 0) || 1;
+                        let out = '';
+                        for (let i = 0; i < len; i++) {
+                            x = (x * 1664525 + 1013904223) >>> 0;
+                            out += (x & 0x0f).toString(16);
+                        }
+                        return out;
+                    };
+
+                    const seed = Number.isFinite(fp.noiseSeed) ? fp.noiseSeed : Math.floor(Math.random() * 0x7fffffff);
+                    const mkId = (n) => seededHex(seed + n, 64);
+                    const mkGroup = (n) => seededHex(seed + n, 32);
+
+                    const defaultDevices = [
+                        { deviceId: 'default', kind: 'audioinput', label: '', groupId: 'default' },
+                        { deviceId: mkId(1), kind: 'audioinput', label: '', groupId: mkGroup(1) },
+                        { deviceId: 'default', kind: 'audiooutput', label: '', groupId: 'default' },
+                        { deviceId: mkId(2), kind: 'audiooutput', label: '', groupId: mkGroup(1) },
+                        { deviceId: mkId(3), kind: 'videoinput', label: '', groupId: mkGroup(2) }
+                    ];
+
+                    const devices = (Array.isArray(fp.mediaDevices) && fp.mediaDevices.length > 0) ? fp.mediaDevices : defaultDevices;
+
+                    const hookedEnumerateDevices = async function enumerateDevices() {
+                        return devices.map(d => ({
+                            deviceId: String(d.deviceId || ''),
+                            kind: String(d.kind || ''),
+                            label: String(d.label || ''),
+                            groupId: String(d.groupId || ''),
+                            toJSON: function() { return { deviceId: this.deviceId, kind: this.kind, label: this.label, groupId: this.groupId }; }
+                        }));
+                    };
+                    navigator.mediaDevices.enumerateDevices = makeNative(hookedEnumerateDevices, 'enumerateDevices');
+                }
+            } catch (e) { }
+
+            // --- P3: 细节指纹伪装 ---
+            // 色深
+            try {
+                if (Number.isFinite(fp.colorDepth)) {
+                    const cd = fp.colorDepth;
+                    Object.defineProperty(screen, 'colorDepth', {
+                        get: makeNative(function colorDepth() { return cd; }, 'colorDepth'),
+                        configurable: true
+                    });
+                    Object.defineProperty(screen, 'pixelDepth', {
+                        get: makeNative(function pixelDepth() { return cd; }, 'pixelDepth'),
+                        configurable: true
+                    });
+                }
+            } catch (e) { }
+
+            try {
+                if (Number.isFinite(fp.pixelRatio)) {
+                    const pr = fp.pixelRatio;
+                    Object.defineProperty(window, 'devicePixelRatio', {
+                        get: makeNative(function devicePixelRatio() { return pr; }, 'devicePixelRatio'),
+                        configurable: true
+                    });
+                }
+            } catch (e) { }
+
+            try {
+                if (fp.doNotTrack !== undefined && fp.doNotTrack !== null) {
+                    const dnt = String(fp.doNotTrack);
+                    Object.defineProperty(Navigator.prototype, 'doNotTrack', {
+                        get: makeNative(function doNotTrack() { return dnt; }, 'doNotTrack'),
+                        configurable: true
+                    });
+                }
+            } catch (e) { }
+
+            try {
+                if (fp.maxTouchPoints !== undefined && fp.maxTouchPoints !== null) {
+                    const mtp = Number(fp.maxTouchPoints) || 0;
+                    Object.defineProperty(Navigator.prototype, 'maxTouchPoints', {
+                        get: makeNative(function maxTouchPoints() { return mtp; }, 'maxTouchPoints'),
+                        configurable: true
+                    });
+                    if (mtp === 0 && ('ontouchstart' in window)) {
+                        try { delete window.ontouchstart; } catch (e) { }
+                    }
+                }
+            } catch (e) { }
+
+            try {
+                if (fp.battery !== undefined && fp.battery !== null && navigator.getBattery) {
+                    const cfg = (fp.battery && typeof fp.battery === 'object') ? fp.battery : {};
+                    const fakeBattery = {
+                        charging: cfg.charging !== undefined ? !!cfg.charging : true,
+                        chargingTime: Number.isFinite(cfg.chargingTime) ? cfg.chargingTime : 0,
+                        dischargingTime: Number.isFinite(cfg.dischargingTime) ? cfg.dischargingTime : Infinity,
+                        level: Number.isFinite(cfg.level) ? Math.max(0, Math.min(1, cfg.level)) : 1,
+                        onchargingchange: null,
+                        onchargingtimechange: null,
+                        ondischargingtimechange: null,
+                        onlevelchange: null,
+                        addEventListener: function() {},
+                        removeEventListener: function() {}
+                    };
+                    Object.defineProperty(Navigator.prototype, 'getBattery', {
+                        value: makeNative(function getBattery() { return Promise.resolve(fakeBattery); }, 'getBattery'),
+                        configurable: true,
+                        writable: true
+                    });
+                }
+            } catch (e) { }
+
+            try {
+                if (fp.connection && navigator.connection) {
+                    const cfg = fp.connection && typeof fp.connection === 'object' ? fp.connection : {};
+                    const fakeConnection = {
+                        effectiveType: cfg.effectiveType || '4g',
+                        downlink: Number.isFinite(cfg.downlink) ? cfg.downlink : 10,
+                        rtt: Number.isFinite(cfg.rtt) ? cfg.rtt : 50,
+                        saveData: !!cfg.saveData,
+                        type: cfg.type || 'wifi',
+                        addEventListener: function() {},
+                        removeEventListener: function() {}
+                    };
+                    Object.defineProperty(Navigator.prototype, 'connection', {
+                        get: makeNative(function connection() { return fakeConnection; }, 'connection'),
+                        configurable: true
+                    });
+                }
+            } catch (e) { }
+
+            // --- 3. Canvas Noise ---
+            if (isEnabled('canvasNoise')) {
+                const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+                const hookedGetImageData = function getImageData(x, y, w, h) {
+                    const imageData = originalGetImageData.apply(this, arguments);
+                    if (fp.noiseSeed) {
+                        for (let i = 0; i < imageData.data.length; i += 4) {
+                            if ((i + fp.noiseSeed) % 53 === 0) {
+                                const noise = fp.canvasNoise ? (fp.canvasNoise.a || 0) : 0;
+                                imageData.data[i+3] = Math.max(0, Math.min(255, imageData.data[i+3] + noise));
+                            }
+                        }
+                    }
+                    return imageData;
+                };
+                CanvasRenderingContext2D.prototype.getImageData = makeNative(hookedGetImageData, 'getImageData');
+            }
 
             // --- 4. Audio Noise ---
-            const originalGetChannelData = AudioBuffer.prototype.getChannelData;
-            const hookedGetChannelData = function getChannelData(channel) {
-                const results = originalGetChannelData.apply(this, arguments);
-                const noise = fp.audioNoise || 0.0000001;
-                for (let i = 0; i < 100 && i < results.length; i++) {
-                    results[i] = results[i] + noise;
-                }
-                return results;
-            };
-            AudioBuffer.prototype.getChannelData = makeNative(hookedGetChannelData, 'getChannelData');
+            if (isEnabled('audioNoise')) {
+                const originalGetChannelData = AudioBuffer.prototype.getChannelData;
+                const hookedGetChannelData = function getChannelData(channel) {
+                    const results = originalGetChannelData.apply(this, arguments);
+                    const noise = fp.audioNoise || 0.0000001;
+                    for (let i = 0; i < 100 && i < results.length; i++) {
+                        results[i] = results[i] + noise;
+                    }
+                    return results;
+                };
+                AudioBuffer.prototype.getChannelData = makeNative(hookedGetChannelData, 'getChannelData');
+            }
 
             // --- 5. WebRTC Protection ---
-            const originalPC = window.RTCPeerConnection;
-            const hookedPC = function RTCPeerConnection(config) {
-                if(!config) config = {};
-                config.iceTransportPolicy = 'relay'; 
-                return new originalPC(config);
-            };
-            hookedPC.prototype = originalPC.prototype;
-            window.RTCPeerConnection = makeNative(hookedPC, 'RTCPeerConnection');
+            const webrtcMode = prot.webrtcMode || 'privacy';
+            if (webrtcMode !== 'real') {
+                const originalPC = window.RTCPeerConnection;
+                if (webrtcMode === 'disabled') {
+                    // Completely disable WebRTC
+                    window.RTCPeerConnection = undefined;
+                    window.webkitRTCPeerConnection = undefined;
+                } else {
+                    // Privacy mode: force relay
+                    const hookedPC = function RTCPeerConnection(config) {
+                        if(!config) config = {};
+                        config.iceTransportPolicy = 'relay'; 
+                        return new originalPC(config);
+                    };
+                    hookedPC.prototype = originalPC.prototype;
+                    window.RTCPeerConnection = makeNative(hookedPC, 'RTCPeerConnection');
+                }
+            }
 
-            // --- 6. 浮动水印（显示环境名称）---
+            // --- 6. ClientRects 伪装 (Phase 5) ---
+            if (isEnabled('clientRects')) {
+                try {
+                    const rectsNoise = () => (Math.random() - 0.5) * 0.00001 * (fp.noiseSeed || 1);
+                    
+                    const origGetBoundingClientRect = Element.prototype.getBoundingClientRect;
+                    Element.prototype.getBoundingClientRect = makeNative(function getBoundingClientRect() {
+                        const rect = origGetBoundingClientRect.call(this);
+                        return new DOMRect(
+                            rect.x + rectsNoise(),
+                            rect.y + rectsNoise(),
+                            rect.width + rectsNoise(),
+                            rect.height + rectsNoise()
+                        );
+                    }, 'getBoundingClientRect');
+
+                    const origGetClientRects = Element.prototype.getClientRects;
+                    Element.prototype.getClientRects = makeNative(function getClientRects() {
+                        const rects = origGetClientRects.call(this);
+                        const DOMRectListProxy = {
+                            length: rects.length,
+                            item: function(i) { return this[i]; },
+                            [Symbol.iterator]: function*() {
+                                for (let i = 0; i < this.length; i++) yield this[i];
+                            }
+                        };
+                        for (let i = 0; i < rects.length; i++) {
+                            const r = rects[i];
+                            DOMRectListProxy[i] = new DOMRect(
+                                r.x + rectsNoise(), r.y + rectsNoise(),
+                                r.width + rectsNoise(), r.height + rectsNoise()
+                            );
+                        }
+                        return DOMRectListProxy;
+                    }, 'getClientRects');
+                } catch (e) { }
+            }
+
+            // --- 7. WebGL 图像噪声 (Phase 5) ---
+            if (isEnabled('webglNoise')) {
+                try {
+                    const origReadPixels = WebGLRenderingContext.prototype.readPixels;
+                    WebGLRenderingContext.prototype.readPixels = makeNative(function readPixels(...args) {
+                        origReadPixels.apply(this, args);
+                        const pixels = args[6];
+                        if (pixels && fp.noiseSeed) {
+                            for (let i = 0; i < Math.min(pixels.length, 1000); i += 4) {
+                                if ((i + fp.noiseSeed) % 47 === 0) {
+                                    pixels[i] = Math.max(0, Math.min(255, pixels[i] + ((fp.canvasNoise && fp.canvasNoise.r) || 1)));
+                                }
+                            }
+                        }
+                    }, 'readPixels');
+
+                    if (typeof WebGL2RenderingContext !== 'undefined') {
+                        const origReadPixels2 = WebGL2RenderingContext.prototype.readPixels;
+                        WebGL2RenderingContext.prototype.readPixels = makeNative(function readPixels(...args) {
+                            origReadPixels2.apply(this, args);
+                            const pixels = args[6];
+                            if (pixels && fp.noiseSeed) {
+                                for (let i = 0; i < Math.min(pixels.length, 1000); i += 4) {
+                                    if ((i + fp.noiseSeed) % 47 === 0) {
+                                        pixels[i] = Math.max(0, Math.min(255, pixels[i] + ((fp.canvasNoise && fp.canvasNoise.r) || 1)));
+                                    }
+                                }
+                            }
+                        }, 'readPixels');
+                    }
+                } catch (e) { }
+            }
+
+            // --- 8. Speech Voices 伪装 (Phase 5) ---
+            if (isEnabled('speechVoices')) {
+                try {
+                    if (window.speechSynthesis) {
+                        const fakeVoices = [
+                            { name: 'Microsoft David - English (United States)', lang: 'en-US', localService: true, default: true, voiceURI: 'Microsoft David - English (United States)' },
+                            { name: 'Microsoft Zira - English (United States)', lang: 'en-US', localService: true, default: false, voiceURI: 'Microsoft Zira - English (United States)' },
+                            { name: 'Google US English', lang: 'en-US', localService: false, default: false, voiceURI: 'Google US English' }
+                        ];
+                        
+                        speechSynthesis.getVoices = makeNative(function getVoices() {
+                            return fakeVoices;
+                        }, 'getVoices');
+                    }
+                } catch (e) { }
+            }
+
+            // --- 9. 端口扫描保护 (Phase 5) ---
+            if (isEnabled('portScanProtection')) {
+                try {
+                    const isLocalhost = (url) => {
+                        if (!url) return false;
+                        const urlStr = typeof url === 'string' ? url : (url.url || url.href || '');
+                        return /^(https?:\\/\\/)?(localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\])(:\\d+)?/i.test(urlStr);
+                    };
+
+                    // 保护 fetch
+                    const origFetch = window.fetch;
+                    window.fetch = makeNative(function fetch(url, ...args) {
+                        if (isLocalhost(url)) {
+                            return Promise.reject(new TypeError('Failed to fetch'));
+                        }
+                        return origFetch.apply(this, [url, ...args]);
+                    }, 'fetch');
+
+                    // 保护 WebSocket
+                    const OrigWebSocket = window.WebSocket;
+                    window.WebSocket = function WebSocket(url, ...args) {
+                        if (isLocalhost(url)) {
+                            throw new DOMException('WebSocket connection failed', 'SecurityError');
+                        }
+                        return new OrigWebSocket(url, ...args);
+                    };
+                    window.WebSocket.prototype = OrigWebSocket.prototype;
+                    window.WebSocket.CONNECTING = OrigWebSocket.CONNECTING;
+                    window.WebSocket.OPEN = OrigWebSocket.OPEN;
+                    window.WebSocket.CLOSING = OrigWebSocket.CLOSING;
+                    window.WebSocket.CLOSED = OrigWebSocket.CLOSED;
+                    makeNative(window.WebSocket, 'WebSocket');
+
+                    // 保护 XMLHttpRequest
+                    const origXHROpen = XMLHttpRequest.prototype.open;
+                    XMLHttpRequest.prototype.open = makeNative(function open(method, url, ...args) {
+                        if (isLocalhost(url)) {
+                            throw new DOMException('Network request failed', 'NetworkError');
+                        }
+                        return origXHROpen.apply(this, [method, url, ...args]);
+                    }, 'open');
+                } catch (e) { }
+            }
+
+            // --- 10. Media Devices 伪装 ---
+            if (isEnabled('mediaDevices')) {
+                try {
+                    if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+                        const fakeDevices = [
+                            { deviceId: 'default', kind: 'audioinput', label: '', groupId: 'default' },
+                            { deviceId: crypto.randomUUID ? crypto.randomUUID() : 'audio-' + fp.noiseSeed, kind: 'audioinput', label: 'Default - Microphone', groupId: 'audio1' },
+                            { deviceId: crypto.randomUUID ? crypto.randomUUID() : 'audioout-' + fp.noiseSeed, kind: 'audiooutput', label: 'Default - Speakers', groupId: 'audio1' },
+                            { deviceId: crypto.randomUUID ? crypto.randomUUID() : 'video-' + fp.noiseSeed, kind: 'videoinput', label: 'Integrated Webcam', groupId: 'video1' }
+                        ];
+                        
+                        navigator.mediaDevices.enumerateDevices = makeNative(async function enumerateDevices() {
+                            return fakeDevices.map(d => ({
+                                deviceId: d.deviceId,
+                                kind: d.kind,
+                                label: d.label,
+                                groupId: d.groupId,
+                                toJSON: () => d
+                            }));
+                        }, 'enumerateDevices');
+                    }
+                } catch (e) { }
+            }
+
+            // --- 11. 浮动水印（显示环境名称）---
             // 根据用户设置选择水印样式
             const watermarkStyle = '${style}';
             

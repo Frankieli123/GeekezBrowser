@@ -1,4 +1,4 @@
-﻿const { app, BrowserWindow, ipcMain, dialog, screen, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, screen, shell } = require('electron');
 const path = require('path');
 const fs = require('fs-extra');
 const { spawn, spawnSync, exec } = require('child_process');
@@ -422,6 +422,77 @@ function getChromiumPath() {
     }
     // Windows
     return findFile(basePath, 'chrome.exe');
+}
+
+let _cachedBundledChromeVersion; // undefined = not resolved yet
+const _CHROME_VERSION_RE = /^\d+\.\d+\.\d+\.\d+$/;
+
+function _compareChromeVersions(a, b) {
+    const pa = String(a).split('.').map(n => parseInt(n, 10));
+    const pb = String(b).split('.').map(n => parseInt(n, 10));
+    const len = Math.max(pa.length, pb.length);
+    for (let i = 0; i < len; i++) {
+        const diff = (pa[i] || 0) - (pb[i] || 0);
+        if (diff !== 0) return diff;
+    }
+    return 0;
+}
+
+function _parseChromeVersionFromPath(chromePath) {
+    if (!chromePath) return null;
+    const normalized = String(chromePath).replace(/\\/g, '/');
+    const m = normalized.match(/\/(?:win64|win32|mac-arm64|mac-x64|linux64)-(\d+\.\d+\.\d+\.\d+)\//);
+    return m ? m[1] : null;
+}
+
+function getBundledChromeVersion() {
+    if (_cachedBundledChromeVersion !== undefined) return _cachedBundledChromeVersion;
+    _cachedBundledChromeVersion = null;
+
+    const basePath = isDev ? path.join(__dirname, 'resources', 'puppeteer') : path.join(process.resourcesPath, 'puppeteer');
+    const chromeRoot = path.join(basePath, 'chrome');
+    if (fs.existsSync(chromeRoot)) {
+        try {
+            const versions = fs.readdirSync(chromeRoot, { withFileTypes: true })
+                .filter(d => d.isDirectory())
+                .map(d => d.name.match(/-(\d+\.\d+\.\d+\.\d+)$/))
+                .map(m => (m ? m[1] : null))
+                .filter(v => v && _CHROME_VERSION_RE.test(v));
+            if (versions.length > 0) {
+                versions.sort(_compareChromeVersions);
+                _cachedBundledChromeVersion = versions[versions.length - 1];
+                return _cachedBundledChromeVersion;
+            }
+        } catch (e) { }
+    }
+
+    _cachedBundledChromeVersion = _parseChromeVersionFromPath(getChromiumPath());
+    return _cachedBundledChromeVersion;
+}
+
+function buildDefaultUserAgent(chromeVersion) {
+    const ver = (_CHROME_VERSION_RE.test(String(chromeVersion || '').trim()))
+        ? String(chromeVersion).trim()
+        : '120.0.0.0';
+    if (process.platform === 'win32') {
+        return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${ver} Safari/537.36`;
+    }
+    if (process.platform === 'darwin') {
+        return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${ver} Safari/537.36`;
+    }
+    return `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${ver} Safari/537.36`;
+}
+
+function ensureFingerprintChromeVersion(fp, chromeVersion) {
+    if (!fp || !_CHROME_VERSION_RE.test(String(chromeVersion || '').trim())) return false;
+    const ver = String(chromeVersion).trim();
+    const nextUA = (typeof fp.userAgent === 'string' && fp.userAgent.length > 0 && /Chrome\/[\d.]+/.test(fp.userAgent))
+        ? fp.userAgent.replace(/Chrome\/[\d.]+/, `Chrome/${ver}`)
+        : buildDefaultUserAgent(ver);
+    const changed = fp.chromeVersion !== ver || fp.userAgent !== nextUA;
+    fp.chromeVersion = ver;
+    fp.userAgent = nextUA;
+    return changed;
 }
 
 // Settings management
@@ -1019,7 +1090,7 @@ function startLocalApiServer() {
                     const data = await _readJsonBody(req);
 
                     const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
-                    const fingerprint = data.fingerprint || generateFingerprint();
+                    const fingerprint = data.fingerprint || generateFingerprint({ chromeVersion: getBundledChromeVersion() });
                     if (data.timezone) fingerprint.timezone = data.timezone;
                     else if (!fingerprint.timezone) fingerprint.timezone = "America/Los_Angeles";
                     if (data.city) fingerprint.city = data.city;
@@ -1391,11 +1462,12 @@ ipcMain.handle('download-xray-update', async (e, url) => {
     }
 });
 ipcMain.handle('get-running-ids', () => Object.keys(activeProcesses));
+ipcMain.handle('generate-fingerprint', () => generateFingerprint({ chromeVersion: getBundledChromeVersion() }));
 ipcMain.handle('get-profiles', async () => { if (!fs.existsSync(PROFILES_FILE)) return []; return fs.readJson(PROFILES_FILE); });
 ipcMain.handle('update-profile', async (event, updatedProfile) => { let profiles = await fs.readJson(PROFILES_FILE); const index = profiles.findIndex(p => p.id === updatedProfile.id); if (index > -1) { profiles[index] = updatedProfile; await fs.writeJson(PROFILES_FILE, profiles); return true; } return false; });
 ipcMain.handle('save-profile', async (event, data) => {
     const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
-    const fingerprint = data.fingerprint || generateFingerprint();
+    const fingerprint = data.fingerprint || generateFingerprint({ chromeVersion: getBundledChromeVersion() });
 
     // Apply timezone
     if (data.timezone) fingerprint.timezone = data.timezone;
@@ -1618,8 +1690,12 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
     const profile = profiles.find(p => p.id === profileId);
     if (!profile) throw new Error('Profile not found');
 
-    if (!profile.fingerprint) profile.fingerprint = generateFingerprint();
+    const bundledChromeVersion = getBundledChromeVersion();
+    if (!profile.fingerprint) profile.fingerprint = generateFingerprint({ chromeVersion: bundledChromeVersion });
     if (!profile.fingerprint.languages) profile.fingerprint.languages = ['en-US', 'en'];
+    if (bundledChromeVersion && ensureFingerprintChromeVersion(profile.fingerprint, bundledChromeVersion)) {
+        try { await fs.writeJson(PROFILES_FILE, profiles); } catch (e) { }
+    }
 
     // Pre-proxy settings (settings already loaded above)
     const override = profile.preProxyOverride || 'default';
@@ -1700,6 +1776,10 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
         }
 
         // 4. 构建启动参数（性能优化）
+        // P1: 使用指纹中的 User-Agent
+        const userAgent = profile.fingerprint?.userAgent
+            || (bundledChromeVersion ? buildDefaultUserAgent(bundledChromeVersion) : null)
+            || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 	        const launchArgs = [
 	            `--proxy-server=socks5://127.0.0.1:${localPort}`,
@@ -1715,6 +1795,7 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
             '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
             `--lang=${targetLang}`,
             `--accept-lang=${targetLang}`,
+            `--user-agent=${userAgent}`,  // P1: 自定义 User-Agent
             `--disable-extensions-except=${extPaths}`,
             `--load-extension=${extPaths}`,
             // 性能优化参数

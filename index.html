@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html>
 
 <head>
@@ -929,6 +929,156 @@
             display: block;
         }
 
+        /* Edit Tab Sections */
+        .edit-tab-section {
+            animation: fadeIn 0.2s ease-out;
+        }
+
+        /* Fingerprint Sections */
+        .fp-section {
+            background: rgba(0, 0, 0, 0.15);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 12px;
+        }
+
+        .fp-section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .fp-section-title {
+            font-size: 13px;
+            font-weight: bold;
+            color: var(--accent);
+        }
+
+        .fp-refresh-btn {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            width: 28px;
+            height: 28px;
+            padding: 0;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .fp-refresh-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            transform: rotate(180deg);
+        }
+
+        .fp-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+
+        .fp-item label {
+            font-size: 10px;
+            font-weight: bold;
+            opacity: 0.7;
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .fp-item input,
+        .fp-item select {
+            margin-bottom: 0;
+            font-size: 11px;
+            padding: 6px 8px;
+            height: auto;
+        }
+
+        .fp-fonts-preview {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            max-height: 80px;
+            overflow-y: auto;
+            padding: 8px;
+            background: rgba(0, 0, 0, 0.1);
+            border-radius: 4px;
+        }
+
+        .fp-font-tag {
+            background: var(--accent);
+            color: var(--bg-color);
+            font-size: 9px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+
+        /* Fingerprint Row Style (BitBrowser style) */
+        .fp-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .fp-row:last-child {
+            border-bottom: none;
+        }
+
+        .fp-row-label {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .fp-row-label > span:first-child {
+            font-size: 12px;
+            font-weight: bold;
+            color: var(--text-primary);
+        }
+
+        .fp-row-hint {
+            font-size: 10px;
+            color: var(--text-secondary);
+            opacity: 0.7;
+        }
+
+        .fp-btn-group {
+            display: flex;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .fp-btn {
+            padding: 5px 12px;
+            font-size: 11px;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+            border-radius: 0;
+            height: auto;
+        }
+
+        .fp-btn:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .fp-btn.active {
+            background: var(--accent);
+            color: var(--bg-color);
+        }
+
+        .fp-btn + .fp-btn {
+            border-left: 1px solid var(--border);
+        }
+
         .ext-item {
             display: flex;
             justify-content: space-between;
@@ -1129,60 +1279,311 @@
 
     <!-- Edit Modal -->
     <div id="editModal" class="modal-overlay">
-        <div class="modal-content">
+        <div class="modal-content" style="max-width: 600px;">
             <div class="modal-header"><span data-i18n="editFingerprint">Edit</span><span style="cursor:pointer"
                     onclick="closeEditModal()">✕</span></div>
-            <div class="modal-body">
-                <label data-i18n="profileName" style="font-size:11px; font-weight:bold; opacity:0.8;">Name</label>
-                <input type="text" id="editName">
-                <label data-i18n="tagsLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Tags</label>
-                <input type="text" id="editTags" spellcheck="false">
-                <label data-i18n="timezoneLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Timezone</label>
-                <div class="timezone-wrapper">
-                    <input type="text" id="editTimezone" placeholder="Type to search or select..." autocomplete="off">
-                    <div class="timezone-dropdown" id="editTimezoneDropdown"></div>
-                </div>
-                <!-- Location Selector (Searchable) -->
-                <label data-i18n="locationLabel"
-                    style="font-size:11px; font-weight:bold; opacity:0.8; margin-top:8px; display:block;">Location
-                    (Geo)</label>
-                <div class="timezone-wrapper">
-                    <input type="text" id="editCity" placeholder="Type to search city..." autocomplete="off">
-                    <div class="timezone-dropdown" id="editCityDropdown"></div>
-                </div>
-                <!-- Hidden input to store confirmed value if needed, but we can parse the text or use a global var -->
-                <div data-i18n="geoHint" style="font-size:10px; opacity:0.5; margin-bottom:12px;">Select a city matching
-                    your proxy.</div>
-                <!-- Language Selector -->
-                <label data-i18n="languageLabel"
-                    style="font-size:11px; font-weight:bold; opacity:0.8; margin-top:8px; display:block;">Language</label>
-                <div class="timezone-wrapper">
-                    <input type="text" id="editLanguage" placeholder="Type to search language..." autocomplete="off">
-                    <div class="timezone-dropdown" id="editLanguageDropdown"></div>
-                </div>
+            
+            <!-- Tab Header -->
+            <div class="tab-header" style="padding: 0 15px; border-bottom: 1px solid var(--border);">
+                <div class="tab-btn active" onclick="switchEditTab('basic')" data-i18n="editTabBasic">Basic</div>
+                <div class="tab-btn" onclick="switchEditTab('fingerprint')" data-i18n="editTabFingerprint">Fingerprint</div>
+            </div>
 
-                <label data-i18n="proxyLink" style="font-size:11px; font-weight:bold; opacity:0.8;">Proxy</label>
-                <textarea id="editProxy" rows="4"></textarea>
-                <div style="display:flex; gap:10px;">
-                    <div style="flex:1"><label data-i18n="preProxySetting"
-                            style="font-size:11px; font-weight:bold; opacity:0.8;">Pre-Proxy</label><select
-                            id="editPreProxyOverride">
-                            <option value="default">Default</option>
-                            <option value="on">On</option>
-                            <option value="off">Off</option>
-                        </select></div>
-                    <div style="flex:1"><label data-i18n="screenRes"
-                            style="font-size:11px; font-weight:bold; opacity:0.8;">Res</label>
-                        <div style="display:flex; gap:5px;"><input type="number" id="editResW"><input type="number"
-                                id="editResH"></div>
+            <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
+                <!-- Basic Tab -->
+                <div id="edit-tab-basic" class="edit-tab-section">
+                    <label data-i18n="profileName" style="font-size:11px; font-weight:bold; opacity:0.8;">Name</label>
+                    <input type="text" id="editName">
+                    <label data-i18n="tagsLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Tags</label>
+                    <input type="text" id="editTags" spellcheck="false">
+                    <label data-i18n="timezoneLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Timezone</label>
+                    <div class="timezone-wrapper">
+                        <input type="text" id="editTimezone" placeholder="Type to search or select..." autocomplete="off">
+                        <div class="timezone-dropdown" id="editTimezoneDropdown"></div>
+                    </div>
+                    <!-- Location Selector (Searchable) -->
+                    <label data-i18n="locationLabel"
+                        style="font-size:11px; font-weight:bold; opacity:0.8; margin-top:8px; display:block;">Location
+                        (Geo)</label>
+                    <div class="timezone-wrapper">
+                        <input type="text" id="editCity" placeholder="Type to search city..." autocomplete="off">
+                        <div class="timezone-dropdown" id="editCityDropdown"></div>
+                    </div>
+                    <div data-i18n="geoHint" style="font-size:10px; opacity:0.5; margin-bottom:12px;">Select a city matching
+                        your proxy.</div>
+                    <!-- Language Selector -->
+                    <label data-i18n="languageLabel"
+                        style="font-size:11px; font-weight:bold; opacity:0.8; margin-top:8px; display:block;">Language</label>
+                    <div class="timezone-wrapper">
+                        <input type="text" id="editLanguage" placeholder="Type to search language..." autocomplete="off">
+                        <div class="timezone-dropdown" id="editLanguageDropdown"></div>
+                    </div>
+
+                    <label data-i18n="proxyLink" style="font-size:11px; font-weight:bold; opacity:0.8;">Proxy</label>
+                    <textarea id="editProxy" rows="4"></textarea>
+                    <div style="display:flex; gap:10px;">
+                        <div style="flex:1"><label data-i18n="preProxySetting"
+                                style="font-size:11px; font-weight:bold; opacity:0.8;">Pre-Proxy</label><select
+                                id="editPreProxyOverride">
+                                <option value="default">Default</option>
+                                <option value="on">On</option>
+                                <option value="off">Off</option>
+                            </select></div>
+                        <div style="flex:1"><label data-i18n="screenRes"
+                                style="font-size:11px; font-weight:bold; opacity:0.8;">Res</label>
+                            <div style="display:flex; gap:5px;"><input type="number" id="editResW"><input type="number"
+                                    id="editResH"></div>
+                        </div>
+                    </div>
+                    <!-- Remote Debugging Port (conditional) -->
+                    <div id="debugPortSection" style="display:none; margin-top:12px;">
+                        <label style="font-size:11px; font-weight:bold; opacity:0.8;">Remote Debugging Port</label>
+                        <input type="number" id="editDebugPort" placeholder="Leave empty for auto-assign (e.g., 9222)">
+                        <div style="font-size:10px; color:#f39c12; margin-top:4px;">
+                            ⚠️ Enabling debugging port may increase detection risk
+                        </div>
                     </div>
                 </div>
-                <!-- Remote Debugging Port (conditional) -->
-                <div id="debugPortSection" style="display:none; margin-top:12px;">
-                    <label style="font-size:11px; font-weight:bold; opacity:0.8;">Remote Debugging Port</label>
-                    <input type="number" id="editDebugPort" placeholder="Leave empty for auto-assign (e.g., 9222)">
-                    <div style="font-size:10px; color:#f39c12; margin-top:4px;">
-                        ⚠️ Enabling debugging port may increase detection risk
+
+                <!-- Fingerprint Tab -->
+                <div id="edit-tab-fingerprint" class="edit-tab-section" style="display: none;">
+                    <!-- User Agent Section -->
+                    <div class="fp-section">
+                        <div class="fp-section-header">
+                            <span class="fp-section-title" data-i18n="fpUserAgent">🌐 User Agent</span>
+                            <button class="fp-refresh-btn" onclick="regenerateUserAgent()" title="Regenerate">🔄</button>
+                        </div>
+                        <textarea id="editUserAgent" rows="2" style="font-size: 11px; resize: none;"></textarea>
+                    </div>
+
+                    <!-- WebGL Section -->
+                    <div class="fp-section">
+                        <div class="fp-section-header">
+                            <span class="fp-section-title" data-i18n="fpWebGL">🎮 WebGL</span>
+                            <button class="fp-refresh-btn" onclick="regenerateWebGL()" title="Regenerate">🔄</button>
+                        </div>
+                        <div class="fp-grid">
+                            <div class="fp-item">
+                                <label data-i18n="fpVendor">Vendor</label>
+                                <input type="text" id="editWebGLVendor" readonly style="opacity: 0.8;">
+                            </div>
+                            <div class="fp-item" style="grid-column: span 2;">
+                                <label data-i18n="fpRenderer">Renderer</label>
+                                <input type="text" id="editWebGLRenderer" readonly style="opacity: 0.8;">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Hardware Section -->
+                    <div class="fp-section">
+                        <div class="fp-section-header">
+                            <span class="fp-section-title" data-i18n="fpHardware">💻 Hardware</span>
+                            <button class="fp-refresh-btn" onclick="regenerateHardware()" title="Regenerate">🔄</button>
+                        </div>
+                        <div class="fp-grid">
+                            <div class="fp-item">
+                                <label data-i18n="fpCPUCores">CPU Cores</label>
+                                <select id="editHardwareConcurrency">
+                                    <option value="2">2</option>
+                                    <option value="4">4</option>
+                                    <option value="6">6</option>
+                                    <option value="8">8</option>
+                                    <option value="12">12</option>
+                                    <option value="16">16</option>
+                                </select>
+                            </div>
+                            <div class="fp-item">
+                                <label data-i18n="fpMemory">Memory (GB)</label>
+                                <select id="editDeviceMemory">
+                                    <option value="2">2</option>
+                                    <option value="4">4</option>
+                                    <option value="8">8</option>
+                                    <option value="16">16</option>
+                                </select>
+                            </div>
+                            <div class="fp-item">
+                                <label data-i18n="fpColorDepth">Color Depth</label>
+                                <select id="editColorDepth">
+                                    <option value="24">24</option>
+                                    <option value="32">32</option>
+                                </select>
+                            </div>
+                            <div class="fp-item">
+                                <label data-i18n="fpPixelRatio">Pixel Ratio</label>
+                                <select id="editPixelRatio">
+                                    <option value="1">1</option>
+                                    <option value="1.25">1.25</option>
+                                    <option value="1.5">1.5</option>
+                                    <option value="2">2</option>
+                                </select>
+                            </div>
+                            <div class="fp-item">
+                                <label data-i18n="fpMaxTouch">Touch Points</label>
+                                <select id="editMaxTouchPoints">
+                                    <option value="0">0 (Desktop)</option>
+                                    <option value="5">5 (Touch)</option>
+                                    <option value="10">10 (Touch)</option>
+                                </select>
+                            </div>
+                            <div class="fp-item">
+                                <label data-i18n="fpDoNotTrack">Do Not Track</label>
+                                <select id="editDoNotTrack">
+                                    <option value="null">Not Set</option>
+                                    <option value="1">1 (Enabled)</option>
+                                    <option value="0">0 (Disabled)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Network Section -->
+                    <div class="fp-section">
+                        <div class="fp-section-header">
+                            <span class="fp-section-title" data-i18n="fpNetwork">📶 Network</span>
+                        </div>
+                        <div class="fp-grid">
+                            <div class="fp-item">
+                                <label data-i18n="fpConnectionType">Connection Type</label>
+                                <select id="editConnectionType">
+                                    <option value="wifi">WiFi</option>
+                                    <option value="ethernet">Ethernet</option>
+                                    <option value="4g">4G</option>
+                                    <option value="3g">3G</option>
+                                </select>
+                            </div>
+                            <div class="fp-item">
+                                <label data-i18n="fpEffectiveType">Effective Type</label>
+                                <select id="editEffectiveType">
+                                    <option value="4g">4G</option>
+                                    <option value="3g">3G</option>
+                                    <option value="2g">2G</option>
+                                </select>
+                            </div>
+                            <div class="fp-item">
+                                <label data-i18n="fpDownlink">Downlink (Mbps)</label>
+                                <input type="number" id="editDownlink" value="10" min="1" max="100">
+                            </div>
+                            <div class="fp-item">
+                                <label data-i18n="fpRTT">RTT (ms)</label>
+                                <input type="number" id="editRTT" value="50" min="10" max="500">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Fonts Preview Section -->
+                    <div class="fp-section">
+                        <div class="fp-section-header">
+                            <span class="fp-section-title" data-i18n="fpFonts">🔤 Fonts</span>
+                            <button class="fp-refresh-btn" onclick="regenerateFonts()" title="Regenerate">🔄</button>
+                        </div>
+                        <div id="editFontsPreview" class="fp-fonts-preview"></div>
+                        <div style="font-size: 10px; opacity: 0.5; margin-top: 5px;" data-i18n="fpFontsHint">
+                            Fonts are randomized based on your OS platform
+                        </div>
+                    </div>
+
+                    <!-- Protection Settings Section -->
+                    <div class="fp-section">
+                        <div class="fp-section-header">
+                            <span class="fp-section-title" data-i18n="fpProtection">🛡️ Protection</span>
+                        </div>
+                        
+                        <!-- Canvas Noise -->
+                        <div class="fp-row">
+                            <div class="fp-row-label">
+                                <span data-i18n="fpCanvas">Canvas</span>
+                                <span class="fp-row-hint" data-i18n="fpCanvasHint">每个环境生成不同的Canvas指纹</span>
+                            </div>
+                            <div class="fp-btn-group">
+                                <button type="button" class="fp-btn active" data-field="canvasNoise" data-value="on" data-i18n="fpRandom">随机</button>
+                                <button type="button" class="fp-btn" data-field="canvasNoise" data-value="off" data-i18n="fpOff">关闭</button>
+                            </div>
+                        </div>
+
+                        <!-- WebGL Image Noise -->
+                        <div class="fp-row">
+                            <div class="fp-row-label">
+                                <span data-i18n="fpWebGLImage">WebGL图像</span>
+                                <span class="fp-row-hint" data-i18n="fpWebGLImageHint">每个环境生成不同的WebGL指纹</span>
+                            </div>
+                            <div class="fp-btn-group">
+                                <button type="button" class="fp-btn active" data-field="webglNoise" data-value="on" data-i18n="fpRandom">随机</button>
+                                <button type="button" class="fp-btn" data-field="webglNoise" data-value="off" data-i18n="fpOff">关闭</button>
+                            </div>
+                        </div>
+
+                        <!-- ClientRects -->
+                        <div class="fp-row">
+                            <div class="fp-row-label">
+                                <span>ClientRects</span>
+                                <span class="fp-row-hint" data-i18n="fpClientRectsHint">伪装元素边界矩形信息</span>
+                            </div>
+                            <div class="fp-btn-group">
+                                <button type="button" class="fp-btn active" data-field="clientRects" data-value="on" data-i18n="fpRandom">随机</button>
+                                <button type="button" class="fp-btn" data-field="clientRects" data-value="off" data-i18n="fpOff">关闭</button>
+                            </div>
+                        </div>
+
+                        <!-- Audio Noise -->
+                        <div class="fp-row">
+                            <div class="fp-row-label">
+                                <span data-i18n="fpAudio">Audio</span>
+                                <span class="fp-row-hint" data-i18n="fpAudioHint">每个环境生成不同的音频指纹</span>
+                            </div>
+                            <div class="fp-btn-group">
+                                <button type="button" class="fp-btn active" data-field="audioNoise" data-value="on" data-i18n="fpRandom">随机</button>
+                                <button type="button" class="fp-btn" data-field="audioNoise" data-value="off" data-i18n="fpOff">关闭</button>
+                            </div>
+                        </div>
+
+                        <!-- Speech Voices -->
+                        <div class="fp-row">
+                            <div class="fp-row-label">
+                                <span>Speech Voices</span>
+                                <span class="fp-row-hint" data-i18n="fpSpeechHint">伪装语音合成列表</span>
+                            </div>
+                            <div class="fp-btn-group">
+                                <button type="button" class="fp-btn active" data-field="speechVoices" data-value="on" data-i18n="fpRandom">随机</button>
+                                <button type="button" class="fp-btn" data-field="speechVoices" data-value="off" data-i18n="fpOff">关闭</button>
+                            </div>
+                        </div>
+
+                        <!-- Media Devices -->
+                        <div class="fp-row">
+                            <div class="fp-row-label">
+                                <span data-i18n="fpMediaDevices">媒体设备</span>
+                                <span class="fp-row-hint" data-i18n="fpMediaHint">伪装摄像头/麦克风列表</span>
+                            </div>
+                            <div class="fp-btn-group">
+                                <button type="button" class="fp-btn active" data-field="mediaDevices" data-value="on" data-i18n="fpRandom">随机</button>
+                                <button type="button" class="fp-btn" data-field="mediaDevices" data-value="off" data-i18n="fpOff">关闭</button>
+                            </div>
+                        </div>
+
+                        <!-- Port Scan Protection -->
+                        <div class="fp-row">
+                            <div class="fp-row-label">
+                                <span data-i18n="fpPortScan">端口扫描保护</span>
+                                <span class="fp-row-hint" data-i18n="fpPortScanHint">阻止网站扫描本地服务端口</span>
+                            </div>
+                            <div class="fp-btn-group">
+                                <button type="button" class="fp-btn active" data-field="portScanProtection" data-value="on" data-i18n="fpOn">开启</button>
+                                <button type="button" class="fp-btn" data-field="portScanProtection" data-value="off" data-i18n="fpOff">关闭</button>
+                            </div>
+                        </div>
+
+                        <!-- WebRTC -->
+                        <div class="fp-row">
+                            <div class="fp-row-label">
+                                <span>WebRTC</span>
+                                <span class="fp-row-hint" data-i18n="fpWebRTCHint">WebRTC IP泄露保护模式</span>
+                            </div>
+                            <div class="fp-btn-group">
+                                <button type="button" class="fp-btn" data-field="webrtcMode" data-value="real" data-i18n="fpReal">真实</button>
+                                <button type="button" class="fp-btn active" data-field="webrtcMode" data-value="privacy" data-i18n="fpPrivacy">隐私</button>
+                                <button type="button" class="fp-btn" data-field="webrtcMode" data-value="disabled" data-i18n="fpDisabled">禁用</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
