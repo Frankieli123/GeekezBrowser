@@ -1,5 +1,10 @@
 // Chinese Translations (External)
 window.zhCN = {
+    launchSettingsTitle: "🚀 启动设置",
+    dashboardOnLaunchLabel: "启动时打开仪表盘",
+    dashboardOnLaunchDesc: "环境启动时自动打开本地仪表盘标签页",
+    apiQuietLaunchLabel: "API 静默启动",
+    apiQuietLaunchDesc: "通过本地 API 启动时，浏览器最小化且不打开仪表盘",
     enablePreProxy: "开启前置代理",
     manageChain: "管理代理链",
     importYaml: "导入数据",

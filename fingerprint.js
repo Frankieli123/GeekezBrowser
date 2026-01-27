@@ -769,16 +769,24 @@ function getInjectScript(fp, profileName, watermarkStyle) {
             // --- 6. ClientRects 伪装 (Phase 5) ---
             if (isEnabled('clientRects')) {
                 try {
-                    const rectsNoise = () => (Math.random() - 0.5) * 0.00001 * (fp.noiseSeed || 1);
-                    
+                    // Stable & sub-pixel noise (avoid UI jitter on real sites).
+                    // NOTE: Do NOT scale linearly with fp.noiseSeed (can be millions).
+                    const seed = (fp.noiseSeed || 1) >>> 0;
+                    const rectNoiseScale = 0.00002;
+                    const rectNoise = (shift) => ((((seed >>> shift) & 0xff) / 255) - 0.5) * rectNoiseScale;
+                    const nx = rectNoise(0);
+                    const ny = rectNoise(8);
+                    const nw = rectNoise(16);
+                    const nh = rectNoise(24);
+
                     const origGetBoundingClientRect = Element.prototype.getBoundingClientRect;
                     Element.prototype.getBoundingClientRect = makeNative(function getBoundingClientRect() {
                         const rect = origGetBoundingClientRect.call(this);
                         return new DOMRect(
-                            rect.x + rectsNoise(),
-                            rect.y + rectsNoise(),
-                            rect.width + rectsNoise(),
-                            rect.height + rectsNoise()
+                            rect.x + nx,
+                            rect.y + ny,
+                            rect.width ? (rect.width + nw) : rect.width,
+                            rect.height ? (rect.height + nh) : rect.height
                         );
                     }, 'getBoundingClientRect');
 
@@ -795,8 +803,10 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                         for (let i = 0; i < rects.length; i++) {
                             const r = rects[i];
                             DOMRectListProxy[i] = new DOMRect(
-                                r.x + rectsNoise(), r.y + rectsNoise(),
-                                r.width + rectsNoise(), r.height + rectsNoise()
+                                r.x + nx,
+                                r.y + ny,
+                                r.width ? (r.width + nw) : r.width,
+                                r.height ? (r.height + nh) : r.height
                             );
                         }
                         return DOMRectListProxy;
@@ -863,10 +873,13 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                         return /^(https?:\\/\\/)?(localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\])(:\\d+)?/i.test(urlStr);
                     };
 
+                    // 仅阻止“非本地页面”对 localhost 的探测，避免影响本地 dashboard/API 正常工作
+                    const isLocalPage = isLocalhost((location && location.origin) ? location.origin : '');
+
                     // 保护 fetch
                     const origFetch = window.fetch;
                     window.fetch = makeNative(function fetch(url, ...args) {
-                        if (isLocalhost(url)) {
+                        if (!isLocalPage && isLocalhost(url)) {
                             return Promise.reject(new TypeError('Failed to fetch'));
                         }
                         return origFetch.apply(this, [url, ...args]);
@@ -875,7 +888,7 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                     // 保护 WebSocket
                     const OrigWebSocket = window.WebSocket;
                     window.WebSocket = function WebSocket(url, ...args) {
-                        if (isLocalhost(url)) {
+                        if (!isLocalPage && isLocalhost(url)) {
                             throw new DOMException('WebSocket connection failed', 'SecurityError');
                         }
                         return new OrigWebSocket(url, ...args);
@@ -890,7 +903,7 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                     // 保护 XMLHttpRequest
                     const origXHROpen = XMLHttpRequest.prototype.open;
                     XMLHttpRequest.prototype.open = makeNative(function open(method, url, ...args) {
-                        if (isLocalhost(url)) {
+                        if (!isLocalPage && isLocalhost(url)) {
                             throw new DOMException('Network request failed', 'NetworkError');
                         }
                         return origXHROpen.apply(this, [method, url, ...args]);

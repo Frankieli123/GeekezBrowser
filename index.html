@@ -1764,6 +1764,43 @@
                         </label>
                     </div>
 
+                    <!-- Launch Settings Section -->
+                    <div style="margin-bottom: 25px;">
+                        <h4 style="margin-bottom:10px; color:var(--text-primary); font-size:14px;"
+                            data-i18n="launchSettingsTitle">🚀 Launch Settings</h4>
+
+                        <label
+                            style="display:flex; align-items:center; gap:10px; padding:12px; border:1px solid var(--border); border-radius:6px; cursor:pointer; margin-bottom:10px;">
+                            <input type="checkbox" id="dashboardOnLaunch" style="width:auto; cursor:pointer;"
+                                onchange="saveLaunchSettings()">
+                            <div style="flex:1;">
+                                <div style="font-weight:bold; margin-bottom:3px; color:var(--text-primary);"
+                                    data-i18n="dashboardOnLaunchLabel">
+                                    Open Dashboard on Launch
+                                </div>
+                                <div style="font-size:11px; color:var(--text-secondary);"
+                                    data-i18n="dashboardOnLaunchDesc">
+                                    Automatically open the local dashboard tab when a profile starts
+                                </div>
+                            </div>
+                        </label>
+
+                        <label
+                            style="display:flex; align-items:center; gap:10px; padding:12px; border:1px solid var(--border); border-radius:6px; cursor:pointer;">
+                            <input type="checkbox" id="apiQuietLaunch" style="width:auto; cursor:pointer;"
+                                onchange="saveLaunchSettings()">
+                            <div style="flex:1;">
+                                <div style="font-weight:bold; margin-bottom:3px; color:var(--text-primary);"
+                                    data-i18n="apiQuietLaunchLabel">
+                                    Quiet Launch via API
+                                </div>
+                                <div style="font-size:11px; color:var(--text-secondary);" data-i18n="apiQuietLaunchDesc">
+                                    Start minimized and without dashboard when launched via Local API
+                                </div>
+                            </div>
+                        </label>
+                    </div>
+
                     <!-- Watermark Style Section -->
                     <div style="margin-bottom: 25px;">
                         <h4 style="margin-bottom:10px; color:var(--text-primary); font-size:14px;"

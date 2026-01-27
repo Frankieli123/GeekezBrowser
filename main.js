@@ -504,7 +504,7 @@ function loadSettings() {
     } catch (e) {
         console.error('Failed to load settings:', e);
     }
-    return { enableRemoteDebugging: false };
+    return { enableRemoteDebugging: false, dashboardOnLaunch: false, apiQuietLaunch: false };
 }
 
 function saveSettings(settings) {
@@ -1581,7 +1581,7 @@ async function deleteProfileInternal(id) {
     return true;
 }
 ipcMain.handle('delete-profile', async (event, id) => deleteProfileInternal(id));
-ipcMain.handle('get-settings', async () => { if (fs.existsSync(SETTINGS_FILE)) return fs.readJson(SETTINGS_FILE); return { preProxies: [], mode: 'single', enablePreProxy: false, enableRemoteDebugging: false }; });
+ipcMain.handle('get-settings', async () => { if (fs.existsSync(SETTINGS_FILE)) return fs.readJson(SETTINGS_FILE); return { preProxies: [], mode: 'single', enablePreProxy: false, enableRemoteDebugging: false, dashboardOnLaunch: false, apiQuietLaunch: false }; });
 ipcMain.handle('save-settings', async (e, settings) => { await fs.writeJson(SETTINGS_FILE, settings); return true; });
 ipcMain.handle('select-extension-folder', async () => {
     const { filePaths } = await dialog.showOpenDialog({
@@ -1620,6 +1620,17 @@ ipcMain.handle('import-data', async () => { const { filePaths } = await dialog.s
 // --- 核心启动逻辑 ---
 async function launchProfileInternal(profileId, watermarkStyle, sender, options = {}) {
     const forceRemoteDebugging = !!options.forceRemoteDebugging;
+    const isApiLaunch = !sender;
+    const settings = await fs.readJson(SETTINGS_FILE).catch(() => ({
+        enableRemoteDebugging: false,
+        userExtensions: [],
+        preProxies: [],
+        mode: 'single',
+        enablePreProxy: false,
+        dashboardOnLaunch: false,
+        apiQuietLaunch: false
+    }));
+    const isQuietLaunch = isApiLaunch && settings.apiQuietLaunch;
 
     if (activeProcesses[profileId]) {
         const proc = activeProcesses[profileId];
@@ -1630,13 +1641,15 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
                 if (pageTarget) {
                     const page = await pageTarget.page();
                     if (page) {
-                        const session = await pageTarget.createCDPSession();
-                        const { windowId } = await session.send('Browser.getWindowForTarget');
-                        await session.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } });
-                        setTimeout(async () => {
-                            try { await session.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } }); } catch (e) { }
-                        }, 100);
-                        await page.bringToFront();
+                        if (!isQuietLaunch) {
+                            const session = await pageTarget.createCDPSession();
+                            const { windowId } = await session.send('Browser.getWindowForTarget');
+                            await session.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } });
+                            setTimeout(async () => {
+                                try { await session.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } }); } catch (e) { }
+                            }, 100);
+                            await page.bringToFront();
+                        }
                     }
                 }
                 const ws = proc.browser && proc.browser.wsEndpoint ? proc.browser.wsEndpoint() : null;
@@ -1676,15 +1689,7 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
 
     await new Promise(resolve => setTimeout(resolve, 500));
 
-    // Load settings early for userExtensions and remote debugging
-    const settings = await fs.readJson(SETTINGS_FILE).catch(() => ({
-        enableRemoteDebugging: false,
-        userExtensions: [],
-        preProxies: [],
-        mode: 'single',
-        enablePreProxy: false,
-        dashboardOnLaunch: true
-    }));
+    // settings already loaded above
 
     const profiles = await fs.readJson(PROFILES_FILE);
     const profile = profiles.find(p => p.id === profileId);
@@ -1808,6 +1813,7 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
             '--disk-cache-size=52428800',        // 限制磁盘缓存为 50MB
             '--media-cache-size=52428800'        // 限制媒体缓存为 50MB
         ];
+        if (isQuietLaunch && process.platform === 'win32') launchArgs.push('--start-minimized');
 
         // 5. Remote Debugging Port (if enabled)
         const remoteDebuggingEnabled = forceRemoteDebugging || settings.enableRemoteDebugging;
@@ -1852,6 +1858,17 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
             env: env  // 注入环境变量
         });
 
+        if (isQuietLaunch) {
+            try {
+                const pageTarget = await browser.waitForTarget(t => t.type() === 'page', { timeout: 3000 }).catch(() => null);
+                if (pageTarget) {
+                    const session = await pageTarget.createCDPSession();
+                    const { windowId } = await session.send('Browser.getWindowForTarget');
+                    await session.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } });
+                }
+            } catch (e) { }
+        }
+
         activeProcesses[profileId] = {
             xrayPid: xrayProcess.pid,
             sshPid: sshInfo ? sshInfo.pid : undefined,
@@ -1864,12 +1881,18 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
         };
         if (sender && !sender.isDestroyed()) sender.send('profile-status', { id: profileId, status: 'running' });
 
-        if (settings.dashboardOnLaunch !== false) {
+        if (settings.dashboardOnLaunch === true && !isQuietLaunch) {
             try {
                 const dashUrl = `http://${LOCAL_API_HOST}:${LOCAL_API_PORT}/dashboard?profile=${encodeURIComponent(profileId)}`;
-                const page = await browser.newPage();
+                const isBlankUrl = (url) => url === 'about:blank' || url === 'chrome://newtab/' || url.startsWith('chrome://newtab');
+                const pages = await browser.pages();
+                const page = pages.find(p => isBlankUrl(p.url())) || await browser.newPage();
                 await page.goto(dashUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
                 await page.bringToFront();
+
+                await Promise.all((await browser.pages())
+                    .filter(p => p !== page && isBlankUrl(p.url()))
+                    .map(p => p.close({ runBeforeUnload: false }).catch(() => { })));
             } catch (e) { }
         }
 

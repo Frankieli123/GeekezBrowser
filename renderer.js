@@ -1364,6 +1364,7 @@ function openSettings() {
     loadUserExtensions();
     loadWatermarkStyle();
     loadRemoteDebuggingSetting();
+    loadLaunchSettings();
 }
 function closeSettings() {
     document.getElementById('settingsModal').style.display = 'none';
@@ -1409,6 +1410,23 @@ async function loadRemoteDebuggingSetting() {
     if (checkbox) {
         checkbox.checked = settings.enableRemoteDebugging || false;
     }
+}
+
+async function loadLaunchSettings() {
+    const settings = await window.electronAPI.getSettings();
+    const dashCb = document.getElementById('dashboardOnLaunch');
+    const quietCb = document.getElementById('apiQuietLaunch');
+    if (dashCb) dashCb.checked = settings.dashboardOnLaunch === true;
+    if (quietCb) quietCb.checked = settings.apiQuietLaunch === true;
+}
+
+async function saveLaunchSettings() {
+    const settings = await window.electronAPI.getSettings();
+    const dashCb = document.getElementById('dashboardOnLaunch');
+    const quietCb = document.getElementById('apiQuietLaunch');
+    settings.dashboardOnLaunch = !!(dashCb && dashCb.checked);
+    settings.apiQuietLaunch = !!(quietCb && quietCb.checked);
+    await window.electronAPI.saveSettings(settings);
 }
 
 function switchSettingsTab(tabName) {
