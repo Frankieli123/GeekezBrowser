@@ -234,7 +234,7 @@ function renderHelpContent() {
     const aboutHTML = curLang === 'en' ?
         `<div style="text-align:center;margin-bottom:24px;padding:20px 0;">
             <div style="font-size:28px;font-weight:700;color:var(--text-primary);letter-spacing:1px;">Geek<span style="color:var(--accent);">EZ</span></div>
-            <div style="font-size:12px;opacity:0.5;margin-top:4px;">v1.3.4 · Anti-detect Browser</div>
+            <div style="font-size:12px;opacity:0.5;margin-top:4px;">v1.3.6 · Anti-detect Browser</div>
          </div>
          
          <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
@@ -297,7 +297,7 @@ function renderHelpContent() {
          </div>` :
         `<div style="text-align:center;margin-bottom:24px;padding:20px 0;">
             <div style="font-size:28px;font-weight:700;color:var(--text-primary);letter-spacing:1px;">Geek<span style="color:var(--accent);">EZ</span></div>
-            <div style="font-size:12px;opacity:0.5;margin-top:4px;">v1.3.4 · 指纹浏览器</div>
+            <div style="font-size:12px;opacity:0.5;margin-top:4px;">v1.3.6 · 指纹浏览器</div>
          </div>
          
          <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
@@ -399,7 +399,40 @@ function showAlert(msg, showBtn = true) {
     if (btn) btn.style.display = showBtn ? 'block' : 'none';
     document.getElementById('alertModal').style.display = 'flex';
 }
-function showConfirm(msg, callback) { document.getElementById('confirmMsg').innerText = msg; document.getElementById('confirmModal').style.display = 'flex'; confirmCallback = callback; }
+function showConfirm(msg, callback) {
+    const modal = document.getElementById('confirmModal');
+    const msgEl = document.getElementById('confirmMsg');
+    const notesEl = document.getElementById('confirmNotes');
+    const iconEl = document.getElementById('confirmIcon');
+    const yesBtn = document.getElementById('confirmYes');
+    const noBtn = document.getElementById('confirmNo');
+
+    msgEl.innerText = msg;
+
+    if (iconEl) {
+        iconEl.textContent = '⚠';
+        iconEl.style.color = 'var(--danger)';
+    }
+
+    if (notesEl) {
+        notesEl.innerHTML = '';
+        notesEl.style.display = 'none';
+        notesEl.onclick = null;
+    }
+
+    if (noBtn) {
+        noBtn.textContent = 'Cancel';
+        noBtn.onclick = () => closeConfirm(false);
+    }
+    if (yesBtn) {
+        yesBtn.classList.add('danger');
+        yesBtn.textContent = 'Confirm';
+        yesBtn.onclick = () => closeConfirm(true);
+    }
+
+    confirmCallback = callback;
+    modal.style.display = 'flex';
+}
 function closeConfirm(result) {
     document.getElementById('confirmModal').style.display = 'none';
     if (result && confirmCallback) confirmCallback();
@@ -594,7 +627,7 @@ async function checkUpdates() {
 
         if (appRes.update) {
             // Found App Update -> Show Confirm with Skip option
-            showUpdateConfirm(appRes.remote, appRes.url);
+            showUpdateConfirm(appRes.remote, appRes.url, appRes.notes);
             return;
         }
 
@@ -634,7 +667,7 @@ async function checkUpdatesSilent() {
             if (btn) btn.classList.add('has-update');
 
             // Auto popup for App update with Skip option
-            showUpdateConfirm(appRes.remote, appRes.url);
+            showUpdateConfirm(appRes.remote, appRes.url, appRes.notes);
             return;
         }
         const xrayRes = await window.electronAPI.invoke('check-xray-update');
@@ -647,19 +680,58 @@ async function checkUpdatesSilent() {
     }
 }
 
+// Simple markdown parser for release notes
+function parseMarkdown(md) {
+    if (!md) return '';
+    return md
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;') // Escape HTML
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
+        .replace(/\*(.*?)\*/g, '<em>$1</em>') // Italic
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="#" data-open-url="$2" style="color:var(--accent);text-decoration:none;">$1</a>') // Links
+        .replace(/^\s*-\s+(.*)$/gm, '<li>$1</li>') // List items
+        .replace(/(<li>.*<\/li>)/s, '<ul style="padding-left: 20px; margin: 5px 0;">$1</ul>') // Wrap lists
+        .replace(/\n\n/g, '<br><br>') // Paragraphs
+        .replace(/\n/g, '<br>'); // Line breaks
+}
+
 // Show update confirm dialog with Skip option
-function showUpdateConfirm(version, url) {
+function showUpdateConfirm(version, url, notes) {
     const modal = document.getElementById('confirmModal');
-    const msgEl = document.getElementById('confirmMessage');
+    const msgEl = document.getElementById('confirmMsg');
+    const notesEl = document.getElementById('confirmNotes');
+    const iconEl = document.getElementById('confirmIcon');
     const yesBtn = document.getElementById('confirmYes');
     const noBtn = document.getElementById('confirmNo');
 
-    msgEl.innerHTML = `${t('appUpdateFound')} (v${version})<br><br>${t('askUpdate')}?`;
+    confirmCallback = null;
+    msgEl.innerHTML = `${t('appUpdateFound')} (v${version})`;
+
+    if (iconEl) {
+        iconEl.textContent = '🚀';
+        iconEl.style.color = 'var(--accent)';
+    }
+
+    if (notes && notesEl) {
+        notesEl.innerHTML = parseMarkdown(notes);
+        notesEl.style.display = 'block';
+        notesEl.onclick = (ev) => {
+            const a = ev && ev.target && ev.target.closest ? ev.target.closest('a[data-open-url]') : null;
+            if (!a) return;
+            ev.preventDefault();
+            const targetUrl = a.getAttribute('data-open-url');
+            if (targetUrl) window.electronAPI.invoke('open-url', targetUrl);
+        };
+    } else if (notesEl) {
+        notesEl.innerHTML = '';
+        notesEl.style.display = 'none';
+        notesEl.onclick = null;
+    }
 
     // Update button - go to download page
     yesBtn.textContent = t('goDownload') || '前往下载';
+    yesBtn.classList.remove('danger');
     yesBtn.onclick = () => {
-        modal.style.display = 'none';
+        closeConfirm(false);
         window.electronAPI.invoke('open-url', url);
     };
 
@@ -667,7 +739,7 @@ function showUpdateConfirm(version, url) {
     noBtn.textContent = t('skipVersion') || '跳过此版本';
     noBtn.onclick = () => {
         localStorage.setItem('geekez_skipped_version', version);
-        modal.style.display = 'none';
+        closeConfirm(false);
         showAlert(t('versionSkipped') || `已跳过 v${version} 版本更新`);
     };
 

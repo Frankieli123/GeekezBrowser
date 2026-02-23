@@ -221,9 +221,7 @@ async function handleApiRequest(method, pathname, body, params) {
         if (!profile) return { status: 404, data: { success: false, error: 'Profile not found' } };
         const proc = activeProcesses[profile.id];
         if (!proc) return { status: 404, data: { success: false, error: 'Profile not running' } };
-        await forceKill(proc.xrayPid);
-        await forceKill(proc.chromePid);
-        delete activeProcesses[profile.id];
+        await closeProfileInternal(profile.id, mainWindow && mainWindow.webContents ? mainWindow.webContents : null);
         return { success: true, message: 'Profile stopped' };
     }
 
@@ -1679,6 +1677,29 @@ function startLocalApiServer() {
 
 app.whenReady().then(async () => {
     createWindow();
+
+    // Auto-start API server if enabled
+    try {
+        if (fs.existsSync(SETTINGS_FILE)) {
+            const settings = await fs.readJson(SETTINGS_FILE);
+            if (settings.enableApiServer && !apiServerRunning) {
+                const port = settings.apiPort || 12138;
+                apiServer = createApiServer(port);
+                apiServer.on('error', (err) => {
+                    apiServer = null;
+                    apiServerRunning = false;
+                    console.error('API Server failed to auto-start:', err);
+                });
+                apiServer.listen(port, '127.0.0.1', () => {
+                    apiServerRunning = true;
+                    console.log(`🔌 API Server auto-started on http://localhost:${port}`);
+                });
+            }
+        }
+    } catch (e) {
+        console.error('Failed to auto-start API server:', e);
+    }
+
     startLocalApiServer();
     setTimeout(() => { fs.emptyDir(TRASH_PATH).catch(() => { }); }, 10000);
 });
@@ -1736,7 +1757,7 @@ ipcMain.handle('test-proxy-latency', async (e, proxyStr) => {
     }
 });
 ipcMain.handle('set-title-bar-color', (e, colors) => { const win = BrowserWindow.fromWebContents(e.sender); if (win) { if (process.platform === 'win32') try { win.setTitleBarOverlay({ color: colors.bg, symbolColor: colors.symbol }); } catch (e) { } win.setBackgroundColor(colors.bg); } });
-ipcMain.handle('check-app-update', async () => { try { const data = await fetchJson('https://api.github.com/repos/EchoHS/GeekezBrowser/releases/latest'); if (!data || !data.tag_name) return { update: false }; const remote = data.tag_name.replace('v', ''); if (compareVersions(remote, app.getVersion()) > 0) { return { update: true, remote, url: 'https://browser.geekez.net/#downloads' }; } return { update: false }; } catch (e) { return { update: false, error: e.message }; } });
+ipcMain.handle('check-app-update', async () => { try { const data = await fetchJson('https://api.github.com/repos/EchoHS/GeekezBrowser/releases/latest'); if (!data || !data.tag_name) return { update: false }; const remote = data.tag_name.replace('v', ''); if (compareVersions(remote, app.getVersion()) > 0) { return { update: true, remote, url: 'https://browser.geekez.net/#downloads', notes: data.body }; } return { update: false }; } catch (e) { return { update: false, error: e.message }; } });
 ipcMain.handle('check-xray-update', async () => { try { const data = await fetchJson('https://api.github.com/repos/XTLS/Xray-core/releases/latest'); if (!data || !data.tag_name) return { update: false }; const remoteVer = data.tag_name; const currentVer = await getLocalXrayVersion(); if (remoteVer !== currentVer) { let assetName = ''; const arch = os.arch(); const platform = os.platform(); if (platform === 'win32') assetName = `Xray-windows-${arch === 'x64' ? '64' : '32'}.zip`; else if (platform === 'darwin') assetName = `Xray-macos-${arch === 'arm64' ? 'arm64-v8a' : '64'}.zip`; else assetName = `Xray-linux-${arch === 'x64' ? '64' : '32'}.zip`; const downloadUrl = `https://gh-proxy.com/https://github.com/XTLS/Xray-core/releases/download/${remoteVer}/${assetName}`; return { update: true, remote: remoteVer.replace(/^v/, ''), downloadUrl }; } return { update: false }; } catch (e) { return { update: false }; } });
 ipcMain.handle('download-xray-update', async (e, url) => {
     const exeName = process.platform === 'win32' ? 'xray.exe' : 'xray';
