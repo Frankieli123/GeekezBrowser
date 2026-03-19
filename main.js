@@ -76,7 +76,7 @@ let apiServer = null;
 let apiServerRunning = false;
 let mainWindow = null; // Global reference for API-to-UI communication
 const DEFAULT_FINGERPRINT_SCREEN = { width: 1920, height: 1080 };
-const DEFAULT_BROWSER_WINDOW = { width: 1280, height: 800 };
+const DEFAULT_BROWSER_WINDOW = { width: 1280, height: 720 };
 const APP_REPO_URL = 'https://github.com/Frankieli123/GeekezBrowser';
 const APP_RELEASES_API_URL = 'https://api.github.com/repos/Frankieli123/GeekezBrowser/releases/latest';
 const APP_RELEASES_URL = `${APP_REPO_URL}/releases`;
@@ -560,7 +560,8 @@ function normalizeFingerprintForStorage(fingerprint, options = {}) {
     const shouldFitWindow = !!options.fitWindowToWorkArea;
     const shouldFitMissingWindow = !!options.fitMissingWindowToWorkArea;
     const workArea = (shouldFitWindow || shouldFitMissingWindow) ? (options.workArea || getPreferredWorkAreaBounds()) : null;
-    const defaultWindow = shouldFitMissingWindow ? fitWindowSizeToWorkArea(screenSize, workArea) : screenSize;
+    const fallbackWindow = sanitizeSize(options.defaultWindow, DEFAULT_BROWSER_WINDOW);
+    const defaultWindow = shouldFitMissingWindow ? fitWindowSizeToWorkArea(fallbackWindow, workArea) : fallbackWindow;
     const windowSize = next.window ? sanitizeSize(next.window, defaultWindow) : defaultWindow;
 
     next.screen = screenSize;
@@ -578,7 +579,21 @@ function mergeFingerprint(baseFingerprint, patchFingerprint, options = {}) {
 
 function createManagedFingerprint(options = {}) {
     const base = generateFingerprint(options);
-    return normalizeFingerprintForStorage(base, { ...options, fitMissingWindowToWorkArea: true, fitWindowToWorkArea: true });
+    delete base.window;
+    return normalizeFingerprintForStorage(base, {
+        ...options,
+        defaultWindow: DEFAULT_BROWSER_WINDOW,
+        fitMissingWindowToWorkArea: true,
+        fitWindowToWorkArea: true
+    });
+}
+
+function isLegacyMirroredWindow(fingerprint) {
+    if (!isPlainObject(fingerprint)) return true;
+    const screenSize = sanitizeSize(fingerprint.screen, DEFAULT_FINGERPRINT_SCREEN);
+    if (!isPlainObject(fingerprint.window)) return true;
+    const windowSize = sanitizeSize(fingerprint.window, screenSize);
+    return windowSize.width === screenSize.width && windowSize.height === screenSize.height;
 }
 
 async function applyBrowserWindowBounds(browser, workArea, windowSize, options = {}) {
@@ -1309,7 +1324,7 @@ function _renderDashboardHtml(profileId) {
         const css = fs.readFileSync(DASHBOARD_CSS_FILE, 'utf8');
         const js = fs.readFileSync(DASHBOARD_JS_FILE, 'utf8');
         return template
-            .split('__PROFILE_ID__').join(safeId)
+            .split('__GEEKEZ_PROFILE_ID_JSON__').join(safeId)
             .split('__DASHBOARD_CSS__').join(css)
             .split('__DASHBOARD_JS__').join(js);
     } catch (e) {
@@ -2598,10 +2613,13 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
         const workArea = getPreferredWorkAreaBounds();
         const launchFingerprint = normalizeFingerprintForStorage(profile.fingerprint, {
             workArea,
+            defaultWindow: DEFAULT_BROWSER_WINDOW,
             fitMissingWindowToWorkArea: true,
             fitWindowToWorkArea: true
         });
-        const launchWindow = launchFingerprint.window || DEFAULT_BROWSER_WINDOW;
+        const launchWindow = isLegacyMirroredWindow(profile.fingerprint)
+            ? fitWindowSizeToWorkArea(DEFAULT_BROWSER_WINDOW, workArea)
+            : (launchFingerprint.window || fitWindowSizeToWorkArea(DEFAULT_BROWSER_WINDOW, workArea));
 
         // 0. Resolve Language (Fix: Resolve 'auto' BEFORE generating extension so inject script gets explicit language)
         const targetLang = launchFingerprint?.language && launchFingerprint.language !== 'auto'

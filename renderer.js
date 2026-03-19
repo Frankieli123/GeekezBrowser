@@ -967,7 +967,7 @@ function fitWindowSizeForEditor(size, workArea = getEditorWorkArea()) {
     };
     const raw = {
         width: parseEditorSize(size && size.width, 1280),
-        height: parseEditorSize(size && size.height, 800)
+        height: parseEditorSize(size && size.height, 720)
     };
     const marginX = area.width >= 1440 ? 80 : 48;
     const marginY = area.height >= 900 ? 96 : 64;
@@ -984,19 +984,27 @@ function fitWindowSizeForEditor(size, workArea = getEditorWorkArea()) {
 }
 
 function sanitizeEditorWindowSize(size, fallback) {
-    const base = fallback || { width: 1280, height: 800 };
+    const base = fallback || { width: 1280, height: 720 };
     return {
         width: parseEditorSize(size && size.width, base.width),
         height: parseEditorSize(size && size.height, base.height)
     };
 }
 
+function isMirroredEditorWindow(fp) {
+    if (!fp || !fp.screen || !fp.window) return true;
+    const screenWidth = parseEditorSize(fp.screen.width, 1920);
+    const screenHeight = parseEditorSize(fp.screen.height, 1080);
+    const windowWidth = parseEditorSize(fp.window.width, screenWidth);
+    const windowHeight = parseEditorSize(fp.window.height, screenHeight);
+    return screenWidth === windowWidth && screenHeight === windowHeight;
+}
+
 function resolveEditWindowSize(fp) {
-    const screenSize = {
-        width: parseEditorSize(fp && fp.screen && fp.screen.width, 1920),
-        height: parseEditorSize(fp && fp.screen && fp.screen.height, 1080)
-    };
-    return fp && fp.window ? sanitizeEditorWindowSize(fp.window, screenSize) : fitWindowSizeForEditor(screenSize);
+    if (fp && fp.window && !isMirroredEditorWindow(fp)) {
+        return sanitizeEditorWindowSize(fp.window, { width: 1280, height: 720 });
+    }
+    return fitWindowSizeForEditor({ width: 1280, height: 720 });
 }
 
 async function openEditModal(id) {
