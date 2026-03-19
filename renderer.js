@@ -850,6 +850,8 @@ function openAddModal() {
     document.getElementById('addProxy').value = '';
     document.getElementById('addTags').value = ''; // Clear tags
     document.getElementById('addTimezone').value = 'Auto (No Change)';
+    document.getElementById('addResW').value = '';
+    document.getElementById('addResH').value = '';
 
     // Initialize location dropdown
     initCustomCityDropdown('addCity', 'addCityDropdown');
@@ -886,6 +888,11 @@ async function saveNewProfile() {
     // Get language value
     const languageInput = document.getElementById('addLanguage').value;
     const language = getLanguageCode(languageInput);
+    const resW = Number.parseInt(document.getElementById('addResW').value, 10);
+    const resH = Number.parseInt(document.getElementById('addResH').value, 10);
+    const screen = (Number.isFinite(resW) && resW > 0 && Number.isFinite(resH) && resH > 0)
+        ? { width: resW, height: resH }
+        : undefined;
 
     const tags = tagsStr.split(/[,，]/).map(s => s.trim()).filter(s => s);
 
@@ -914,7 +921,7 @@ async function saveNewProfile() {
         }
 
         try {
-            await window.electronAPI.saveProfile({ name, proxyStr, tags, timezone, city, geolocation, language });
+            await window.electronAPI.saveProfile({ name, proxyStr, tags, timezone, city, geolocation, language, screen });
             createdCount++;
         } catch (e) {
             console.error(`Failed to create profile ${name}:`, e);

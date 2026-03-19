@@ -170,7 +170,9 @@ function parseProxyLink(link, tag) {
                     try {
                         const decoded = decodeBase64Content(userPart);
                         if (decoded.includes(':')) {
-                            [method, password] = decoded.split(':');
+                            const colonIndex = decoded.indexOf(':');
+                            method = decoded.substring(0, colonIndex);
+                            password = decoded.substring(colonIndex + 1);
                         } else {
                             // Fallback or error
                             throw new Error("Invalid SS User Part");
@@ -180,7 +182,9 @@ function parseProxyLink(link, tag) {
                         throw e;
                     }
                 } else {
-                    [method, password] = userPart.split(':');
+                    const colonIndex = userPart.indexOf(':');
+                    method = userPart.substring(0, colonIndex);
+                    password = userPart.substring(colonIndex + 1);
                 }
 
                 // Host part might be ipv6 [::1]:port or ipv4:port
@@ -224,6 +228,57 @@ function parseProxyLink(link, tag) {
             outbound.streamSettings = {
                 network: "tcp"
             };
+
+            const fullLinkForParams = link.split('#')[0];
+            if (fullLinkForParams.includes('?')) {
+                const queryStr = fullLinkForParams.split('?')[1];
+                const urlParams = new URLSearchParams(queryStr);
+                const plugin = urlParams.get('plugin');
+                if (plugin && plugin.includes('obfs')) {
+                    const pluginParts = plugin.split(';');
+                    let obfsType = '';
+                    let obfsHost = '';
+
+                    pluginParts.forEach((part) => {
+                        const [key, value] = part.split('=');
+                        if (key === 'obfs') obfsType = value || '';
+                        if (key === 'obfs-host') obfsHost = value || '';
+                    });
+
+                    if (obfsType === 'http') {
+                        outbound.streamSettings = {
+                            network: "tcp",
+                            tcpSettings: {
+                                header: {
+                                    type: "http",
+                                    request: {
+                                        version: "1.1",
+                                        method: "GET",
+                                        path: ["/"],
+                                        headers: {
+                                            Host: obfsHost ? [obfsHost] : [],
+                                            "User-Agent": [],
+                                            "Accept-Encoding": ["gzip, deflate"],
+                                            Connection: ["keep-alive"],
+                                            Pragma: ["no-cache"]
+                                        }
+                                    }
+                                }
+                            }
+                        };
+                    } else if (obfsType === 'tls') {
+                        outbound.streamSettings = {
+                            network: "tcp",
+                            security: "tls",
+                            tlsSettings: {
+                                serverName: obfsHost || host,
+                                allowInsecure: true
+                            }
+                        };
+                    }
+                }
+            }
+
             // Mux 配置
             outbound.mux = {
                 enabled: false,

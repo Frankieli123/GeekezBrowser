@@ -607,6 +607,105 @@ async function applyBrowserWindowBounds(browser, workArea, windowSize, options =
     return size;
 }
 
+function isBlankOrNewTabUrl(url) {
+    const value = String(url || '');
+    return value === 'about:blank' || value === 'chrome://newtab/' || value.startsWith('chrome://newtab');
+}
+
+function isLikelyStartupExtensionUrl(url) {
+    const value = String(url || '').toLowerCase();
+    if (!value) return false;
+    if (value.includes('onboarding.') || value.includes('extension-welcome')) return true;
+    if (!value.startsWith('chrome-extension://')) return false;
+    return (
+        value.includes('/welcome')
+        || value.includes('/onboarding')
+        || value.includes('/install')
+        || value.includes('/getting-started')
+        || value.includes('/getstarted')
+        || value.includes('/first-run')
+        || value.includes('/firstrun')
+    );
+}
+
+function isPreservedUrl(url, preservedPrefixes = []) {
+    const value = String(url || '');
+    return preservedPrefixes.some(prefix => prefix && (value === prefix || value.startsWith(prefix)));
+}
+
+async function applyTimezoneOverrideToBrowser(browser, timezone) {
+    if (!browser || process.platform !== 'win32' || !timezone || timezone === 'Auto') return;
+
+    const applyToPage = async (page) => {
+        if (!page) return;
+        try { await page.emulateTimezone(timezone); } catch (e) { }
+    };
+
+    try {
+        const pages = await browser.pages();
+        await Promise.all(pages.map(applyToPage));
+    } catch (e) { }
+
+    const onTargetCreated = async (target) => {
+        if (!target || target.type() !== 'page') return;
+        try {
+            const page = await target.page();
+            await applyToPage(page);
+        } catch (e) { }
+    };
+
+    try { browser.on('targetcreated', onTargetCreated); } catch (e) { }
+}
+
+async function cleanupStartupPages(browser, options = {}) {
+    if (!browser) return;
+
+    const preservedPrefixes = (options.preservedPrefixes || []).filter(Boolean);
+    const startupWindowMs = parsePositiveInt(options.startupWindowMs, 3000);
+    const startTime = Date.now();
+
+    const sweep = async () => {
+        const pages = await browser.pages().catch(() => []);
+        const items = [];
+
+        for (const page of pages) {
+            let url = '';
+            try { url = page.url(); } catch (e) { }
+            items.push({ page, url: String(url || '') });
+        }
+
+        const realPages = items.filter(({ url }) => (
+            url
+            && !isBlankOrNewTabUrl(url)
+            && !isLikelyStartupExtensionUrl(url)
+            && !isPreservedUrl(url, preservedPrefixes)
+        ));
+
+        for (const { page, url } of items) {
+            if (!page || isPreservedUrl(url, preservedPrefixes)) continue;
+            if (isLikelyStartupExtensionUrl(url) || (isBlankOrNewTabUrl(url) && realPages.length > 0)) {
+                try { await page.close({ runBeforeUnload: false }); } catch (e) { }
+            }
+        }
+    };
+
+    const onTargetCreated = async (target) => {
+        if (Date.now() - startTime > startupWindowMs) {
+            try { browser.off('targetcreated', onTargetCreated); } catch (e) { }
+            return;
+        }
+        if (!target || target.type() !== 'page') return;
+        await _sleep(350);
+        await sweep();
+    };
+
+    try { browser.on('targetcreated', onTargetCreated); } catch (e) { }
+    await sweep().catch(() => { });
+    setTimeout(() => {
+        try { browser.off('targetcreated', onTargetCreated); } catch (e) { }
+    }, startupWindowMs + 500);
+}
+
 async function promptSshHostKeyDecision({ host, port, fingerprint, isUpdate, raw } = {}) {
     const safeHost = host ? String(host) : '';
     const safePort = (port !== undefined && port !== null) ? String(port) : '';
@@ -1685,10 +1784,14 @@ ipcMain.handle('update-profile', async (event, updatedProfile) => {
 });
 ipcMain.handle('save-profile', async (event, data) => {
     const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
-    const fingerprint = normalizeFingerprintForStorage(
-        data.fingerprint || createManagedFingerprint({ chromeVersion: getBundledChromeVersion() }),
-        { fitMissingWindowToWorkArea: true }
-    );
+    const fingerprintSource = isPlainObject(data.fingerprint)
+        ? deepMergeObjects({}, data.fingerprint)
+        : createManagedFingerprint({ chromeVersion: getBundledChromeVersion() });
+    if (data.screen) {
+        fingerprintSource.screen = sanitizeSize(data.screen, DEFAULT_FINGERPRINT_SCREEN);
+        if (!(isPlainObject(data.fingerprint) && isPlainObject(data.fingerprint.window))) delete fingerprintSource.window;
+    }
+    const fingerprint = normalizeFingerprintForStorage(fingerprintSource, { fitMissingWindowToWorkArea: true });
 
     // Apply timezone
     if (data.timezone) fingerprint.timezone = data.timezone;
@@ -2536,11 +2639,11 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
 	            '--disable-quic',
 	            `--user-data-dir=${userDataDir}`,
 	            `--window-size=${launchWindow.width},${launchWindow.height}`,
-	            '--restore-last-session',
-	            '--no-sandbox',
-	            '--disable-setuid-sandbox',
+            '--restore-last-session',
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
             '--disable-blink-features=AutomationControlled',
-            '--disable-features=IsolateOrigins,site-per-process',
+            '--disable-features=IsolateOrigins,site-per-process,ExtensionsMenuAccessControl',
             '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
             `--lang=${targetLang}`,
             `--accept-lang=${targetLang}`,
@@ -2550,6 +2653,7 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
             // 性能优化参数
             '--no-first-run',                    // 跳过首次运行向导
             '--no-default-browser-check',        // 跳过默认浏览器检查
+            '--disable-session-crashed-bubble',  // 隐藏恢复会话提示
             '--disable-background-timer-throttling', // 防止后台标签页被限速
             '--disable-backgrounding-occluded-windows',
             '--disable-renderer-backgrounding',
@@ -2614,6 +2718,7 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
             env: env  // 注入环境变量
         });
 
+        await applyTimezoneOverrideToBrowser(browser, launchFingerprint.timezone);
         await applyBrowserWindowBounds(browser, workArea, launchWindow, { minimize: isQuietLaunch });
 
         activeProcesses[profileId] = {
@@ -2636,20 +2741,18 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
         if (sshInfo && sshInfo.child) bindSshLifecycle(profileId, sshInfo.child);
         if (sender && !sender.isDestroyed()) sender.send('profile-status', { id: profileId, status: 'running' });
 
+        let dashboardUrl = '';
         if (settings.dashboardOnLaunch === true && !isQuietLaunch) {
             try {
-                const dashUrl = `http://${LOCAL_API_HOST}:${LOCAL_API_PORT}/dashboard?profile=${encodeURIComponent(profileId)}`;
-                const isBlankUrl = (url) => url === 'about:blank' || url === 'chrome://newtab/' || url.startsWith('chrome://newtab');
+                dashboardUrl = `http://${LOCAL_API_HOST}:${LOCAL_API_PORT}/dashboard?profile=${encodeURIComponent(profileId)}`;
                 const pages = await browser.pages();
-                const page = pages.find(p => isBlankUrl(p.url())) || await browser.newPage();
-                await page.goto(dashUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
+                const page = pages.find(p => isBlankOrNewTabUrl(p.url())) || await browser.newPage();
+                await page.goto(dashboardUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
                 await page.bringToFront();
-
-                await Promise.all((await browser.pages())
-                    .filter(p => p !== page && isBlankUrl(p.url()))
-                    .map(p => p.close({ runBeforeUnload: false }).catch(() => { })));
             } catch (e) { }
         }
+
+        await cleanupStartupPages(browser, { preservedPrefixes: dashboardUrl ? [dashboardUrl] : [] });
 
         // CDP Geolocation Removed in favor of Stealth JS Hook
         // 由于 CDP 本身会被检测，我们移除所有 Emulation.Overrides
