@@ -13,6 +13,8 @@ const enTranslations = {
     optOn: "Force ON",
     optOff: "Force OFF",
     screenRes: "Resolution",
+    launchWindowSize: "Launch Window",
+    launchWindowHint: "Actual startup size, auto-fitted to current screen.",
     cancel: "Cancel",
     save: "Save",
     add: "Add",

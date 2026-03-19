@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GeekEZ 仪表盘</title>
+  <style>
+__DASHBOARD_CSS__
+  </style>
+  <script>window.__PROFILE_ID__ = __PROFILE_ID__;</script>
+</head>
+<body>
+  <div class="page-bg page-bg-a"></div>
+  <div class="page-bg page-bg-b"></div>
+  <main class="shell">
+    <header class="topbar card" data-reveal="1">
+      <div class="brand-block">
+        <div class="eyebrow">GeekEZ Runtime Console</div>
+        <h1 class="title">仪表盘</h1>
+        <div class="meta-strip">
+          <span class="meta-chip">Profile <code id="pid"></code></span>
+          <span class="meta-chip">API <span id="api"></span></span>
+          <span class="meta-chip">最近刷新 <span id="lastUpdated">-</span></span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button class="btn primary" id="btnAll">刷新全部</button>
+        <button class="btn" id="btnIp">刷新 IP</button>
+        <button class="btn" id="btnNet">刷新网络信息</button>
+        <button class="btn warn" id="btnRestartSsh" hidden>重连 SSH</button>
+        <button class="btn" id="btnCopyWs">复制 WS</button>
+      </div>
+    </header>
+
+    <section class="alert" id="alertBar" hidden>
+      <div class="alert-text" id="err"></div>
+    </section>
+
+    <section class="hero card" data-reveal="2">
+      <div class="hero-main">
+        <div class="hero-label">代理出口</div>
+        <div class="hero-ip" id="ip">-</div>
+        <div class="hero-source" id="ipMeta">来源: -</div>
+        <div class="hero-facts">
+          <div class="fact-row">
+            <span class="fact-k">名称</span>
+            <span class="fact-v" id="name">-</span>
+          </div>
+          <div class="fact-row">
+            <span class="fact-k">代理</span>
+            <span class="fact-v mono" id="proxyMasked">-</span>
+          </div>
+        </div>
+      </div>
+      <div class="hero-side">
+        <div class="state-grid">
+          <div class="state-card" data-state-card="runtime">
+            <div class="state-k">实例状态</div>
+            <div class="state-pill">
+              <span class="dot" id="dotRun"></span>
+              <span id="runText">-</span>
+            </div>
+          </div>
+          <div class="state-card" data-state-card="proxy">
+            <div class="state-k">代理类型</div>
+            <div class="state-v" id="proxyType">-</div>
+          </div>
+          <div class="state-card" id="sshStateCard" data-state-card="ssh">
+            <div class="state-k">SSH 状态</div>
+            <div class="state-v" id="sshState">-</div>
+            <div class="state-sub" id="sshHint">当前未使用 SSH 代理</div>
+          </div>
+          <div class="state-card" data-state-card="identity">
+            <div class="state-k">ProfileID</div>
+            <div class="state-v mono compact" id="profileInline">-</div>
+          </div>
+        </div>
+        <div class="hero-actions">
+          <button class="btn subtle" id="btnCopyIp">复制 IP</button>
+          <button class="btn subtle" id="btnCopyProxy">复制代理</button>
+          <button class="btn subtle" id="btnCopyProfile">复制 ProfileID</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card col-5" data-reveal="3">
+        <div class="card-head">
+          <div>
+            <div class="card-kicker">Geo / ASN</div>
+            <h2 class="card-title">网络信息</h2>
+          </div>
+          <div class="mini-pill">IP <span id="netIp">-</span></div>
+        </div>
+        <div class="field-grid">
+          <div class="field">
+            <div class="field-k">位置</div>
+            <div class="field-v" id="loc">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k">时区</div>
+            <div class="field-v" id="tz">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k">ASN / 组织</div>
+            <div class="field-v" id="org">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k">坐标</div>
+            <div class="field-v mono" id="geo">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k">邮编</div>
+            <div class="field-v" id="postal">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k">来源</div>
+            <div class="field-v mono" id="netSource">-</div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card col-7" data-reveal="4">
+        <div class="card-head">
+          <div>
+            <div class="card-kicker">Connectivity</div>
+            <h2 class="card-title">运行 / 调试</h2>
+          </div>
+          <div class="mini-pill">SSH <span id="sshStateMini">-</span></div>
+        </div>
+        <div class="stack">
+          <div class="endpoint">
+            <div class="endpoint-main">
+              <div class="field-k">WS</div>
+              <div class="field-v mono" id="ws">-</div>
+            </div>
+            <button class="copy" id="copyWs">复制</button>
+          </div>
+          <div class="endpoint">
+            <div class="endpoint-main">
+              <div class="field-k">HTTP</div>
+              <div class="field-v mono" id="http">-</div>
+            </div>
+            <button class="copy" id="copyHttp">复制</button>
+          </div>
+        </div>
+        <div class="metric-strip">
+          <div class="metric-box">
+            <div class="field-k">debugPort</div>
+            <div class="metric-v mono" id="debugPort">-</div>
+          </div>
+          <div class="metric-box">
+            <div class="field-k">localPort</div>
+            <div class="metric-v mono" id="localPort">-</div>
+          </div>
+          <div class="metric-box">
+            <div class="field-k">sshLocalPort</div>
+            <div class="metric-v mono" id="sshLocalPort">-</div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card col-6" data-reveal="5">
+        <div class="card-head">
+          <div>
+            <div class="card-kicker">Profile Metadata</div>
+            <h2 class="card-title">Profile 信息</h2>
+          </div>
+        </div>
+        <div class="field-grid">
+          <div class="field">
+            <div class="field-k">名称</div>
+            <div class="field-v" id="pName">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k">创建时间</div>
+            <div class="field-v" id="createdAt">-</div>
+          </div>
+          <div class="field field-wide">
+            <div class="field-k">备注</div>
+            <div class="endpoint no-pad">
+              <div class="field-v" id="remark">-</div>
+              <button class="copy" id="copyRemark">复制</button>
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-k">preProxyOverride</div>
+            <div class="field-v mono" id="preProxyOverride">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k">标签</div>
+            <div class="tag-list" id="tags">-</div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card col-6" id="acctCard" hidden data-reveal="6">
+        <div class="card-head">
+          <div>
+            <div class="card-kicker">Account Tools</div>
+            <h2 class="card-title">账号 / 2FA</h2>
+          </div>
+        </div>
+        <div class="field-grid">
+          <div class="field">
+            <div class="field-k">邮箱</div>
+            <div class="field-v mono" id="acctEmail">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k">辅助邮箱</div>
+            <div class="field-v mono" id="acctAux">-</div>
+          </div>
+          <div class="field field-wide">
+            <div class="field-k">动态码</div>
+            <div class="otp-box">
+              <div class="otp-code mono" id="otpCode">------</div>
+              <div class="otp-side">
+                <div class="mini-pill">剩余 <span id="otpRemain">-</span>s</div>
+                <div class="progress"><div id="otpBar"></div></div>
+              </div>
+              <div class="otp-actions">
+                <button class="copy" id="copyOtp">复制</button>
+                <a class="text-link" id="otpFallback" href="#" target="_blank" rel="noreferrer" hidden>2fa.show</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card col-12" data-reveal="7">
+        <div class="card-head">
+          <div>
+            <div class="card-kicker">Advanced Diagnostics</div>
+            <h2 class="card-title">原始信息</h2>
+          </div>
+        </div>
+        <div class="advanced-stack">
+          <details open>
+            <summary>指纹配置</summary>
+            <pre id="fingerprint">-</pre>
+          </details>
+          <details>
+            <summary>浏览器信息</summary>
+            <pre id="browserInfo">-</pre>
+          </details>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <script>
+__DASHBOARD_JS__
+  </script>
+</body>
+</html>

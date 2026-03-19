@@ -18,6 +18,8 @@ window.zhCN = {
     optOn: "强制开启",
     optOff: "强制关闭",
     screenRes: "屏幕分辨率",
+    launchWindowSize: "启动窗口",
+    launchWindowHint: "浏览器实际打开尺寸，会自动适配当前屏幕。",
     cancel: "取消",
     save: "保存",
     add: "添加",

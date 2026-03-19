@@ -273,6 +273,8 @@ function getInjectScript(fp, profileName, watermarkStyle) {
             if (fp.screen && fp.screen.width && fp.screen.height) {
                 const screenWidth = fp.screen.width;
                 const screenHeight = fp.screen.height;
+                const windowWidth = fp.window && fp.window.width ? fp.window.width : screenWidth;
+                const windowHeight = fp.window && fp.window.height ? fp.window.height : screenHeight;
                 
                 Object.defineProperty(screen, 'width', {
                     get: makeNative(function width() { return screenWidth; }, 'width'),
@@ -292,11 +294,11 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                 });
                 // Also override window.outerWidth/outerHeight for consistency
                 Object.defineProperty(window, 'outerWidth', {
-                    get: makeNative(function outerWidth() { return screenWidth; }, 'outerWidth'),
+                    get: makeNative(function outerWidth() { return windowWidth; }, 'outerWidth'),
                     configurable: true
                 });
                 Object.defineProperty(window, 'outerHeight', {
-                    get: makeNative(function outerHeight() { return screenHeight; }, 'outerHeight'),
+                    get: makeNative(function outerHeight() { return windowHeight; }, 'outerHeight'),
                     configurable: true
                 });
             }

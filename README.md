@@ -9,7 +9,7 @@
 
 **A Stealthy Anti-Detect Browser for E-Commerce & Multi-Account Management.**
 
-[🇨🇳 中文说明 (Chinese)](docs/README_zh.md) | [📥 Download](https://github.com/EchoHS/GeekezBrowser/releases)
+[🇨🇳 中文说明 (Chinese)](docs/README_zh.md) | [📥 Download](https://github.com/Frankieli123/GeekezBrowser/releases)
 
 </div>
 
@@ -62,7 +62,7 @@ It is designed to help e-commerce operators (Amazon, TikTok, Facebook, Shopee, e
 ## 🚀 Quick Start
 
 ### Option 1: Download Release (Recommended)
-Go to the [**Releases**](https://github.com/EchoHS/GeekezBrowser/releases) page and download the installer for your platform:
+Go to the [**Releases**](https://github.com/Frankieli123/GeekezBrowser/releases) page and download the installer for your platform:
 *   **Windows**: `GeekEZ Browser-{version}-win-x64.exe`
 *   **macOS (ARM64)**: `GeekEZ Browser-{version}-mac-arm64.dmg`
 *   **macOS (Intel)**: `GeekEZ Browser-{version}-mac-x64.dmg`
@@ -74,7 +74,7 @@ Go to the [**Releases**](https://github.com/EchoHS/GeekezBrowser/releases) page 
 
 1.  **Clone the repository**
     ```bash
-    git clone https://github.com/EchoHS/GeekezBrowser.git
+    git clone https://github.com/Frankieli123/GeekezBrowser.git
     cd GeekezBrowser
     ```
 

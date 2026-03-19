@@ -24,7 +24,18 @@ function getProxyRemark(link) {
     return '';
 }
 
+function isDirectProxyLink(link) {
+    const raw = String(link || '').trim().toLowerCase();
+    return raw === '' || raw === 'direct' || raw === 'direct://' || raw === 'freedom' || raw === 'freedom://' || raw === 'none';
+}
+
+function buildDirectOutbound(tag) {
+    return { protocol: "freedom", tag };
+}
+
 function parseProxyLink(link, tag) {
+    if (isDirectProxyLink(link)) return buildDirectOutbound(tag);
+
     let outbound = {
         tag: tag,
         sniffing: {
@@ -319,14 +330,18 @@ function generateXrayConfig(mainProxyStr, localPort, preProxyConfig = null) {
     const outbounds = [];
     let mainOutbound;
     try { mainOutbound = parseProxyLink(mainProxyStr, "proxy_main"); }
-    catch (e) { mainOutbound = { protocol: "freedom", tag: "proxy_main" }; }
+    catch (e) { mainOutbound = buildDirectOutbound("proxy_main"); }
 
     if (preProxyConfig && preProxyConfig.preProxies && preProxyConfig.preProxies.length > 0) {
         try {
             const target = preProxyConfig.preProxies[0];
-            const preOutbound = parseProxyLink(target.url, "proxy_pre");
-            outbounds.push(preOutbound);
-            mainOutbound.proxySettings = { tag: "proxy_pre" };
+            if (mainOutbound.protocol === "freedom") {
+                mainOutbound = parseProxyLink(target.url, "proxy_main");
+            } else {
+                const preOutbound = parseProxyLink(target.url, "proxy_pre");
+                outbounds.push(preOutbound);
+                mainOutbound.proxySettings = { tag: "proxy_pre" };
+            }
         } catch (e) { }
     }
 

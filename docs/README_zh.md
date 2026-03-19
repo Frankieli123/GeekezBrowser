@@ -9,7 +9,7 @@
 
 **专为电商运营和多账号管理打造的指纹隐匿浏览器**
 
-[🇺🇸 English](../README.md) | [📥 下载安装包](https://github.com/EchoHS/GeekezBrowser/releases)
+[🇺🇸 English](../README.md) | [📥 下载安装包](https://github.com/Frankieli123/GeekezBrowser/releases)
 
 </div>
 
@@ -58,7 +58,7 @@
 ## 🚀 快速开始
 
 ### 方法 1: 下载安装包 (推荐)
-前往 [**Releases**](https://github.com/EchoHS/GeekezBrowser/releases) 页面下载适配您系统的安装包：
+前往 [**Releases**](https://github.com/Frankieli123/GeekezBrowser/releases) 页面下载适配您系统的安装包：
 *   **Windows**: `GeekEZ Browser-{version}-win-x64.exe`
 *   **macOS (ARM64)**: `GeekEZ Browser-{version}-mac-arm64.dmg`
 *   **macOS (Intel)**: `GeekEZ Browser-{version}-mac-x64.dmg`
@@ -70,7 +70,7 @@
 
 1.  **克隆仓库**
     ```bash
-    git clone https://github.com/EchoHS/GeekezBrowser.git
+    git clone https://github.com/Frankieli123/GeekezBrowser.git
     cd GeekezBrowser
     ```
 

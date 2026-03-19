@@ -57,6 +57,9 @@ const DATA_PATH = getCustomDataPath();
 const TRASH_PATH = path.join(app.getPath('userData'), '_Trash_Bin');
 const PROFILES_FILE = path.join(DATA_PATH, 'profiles.json');
 const SETTINGS_FILE = path.join(DATA_PATH, 'settings.json');
+const DASHBOARD_TEMPLATE_FILE = path.join(__dirname, 'dashboard-template.html');
+const DASHBOARD_CSS_FILE = path.join(__dirname, 'dashboard.css');
+const DASHBOARD_JS_FILE = path.join(__dirname, 'dashboard.js');
 
 fs.ensureDirSync(DATA_PATH);
 fs.ensureDirSync(TRASH_PATH);
@@ -72,6 +75,11 @@ const LOCAL_API_PORT = Number.parseInt(process.env.GEEKEZ_API_PORT || '17555', 1
 let apiServer = null;
 let apiServerRunning = false;
 let mainWindow = null; // Global reference for API-to-UI communication
+const DEFAULT_FINGERPRINT_SCREEN = { width: 1920, height: 1080 };
+const DEFAULT_BROWSER_WINDOW = { width: 1280, height: 800 };
+const APP_REPO_URL = 'https://github.com/Frankieli123/GeekezBrowser';
+const APP_RELEASES_API_URL = 'https://api.github.com/repos/Frankieli123/GeekezBrowser/releases/latest';
+const APP_RELEASES_URL = `${APP_REPO_URL}/releases`;
 
 // ============================================================================
 // REST API Server
@@ -159,7 +167,10 @@ async function handleApiRequest(method, pathname, body, params) {
     if (method === 'POST' && pathname === '/api/profiles') {
         const data = JSON.parse(body);
         const id = uuidv4();
-        const fingerprint = await generateFingerprint({});
+        const fingerprint = normalizeFingerprintForStorage(
+            data.fingerprint || createManagedFingerprint({}),
+            { fitMissingWindowToWorkArea: true }
+        );
         const baseName = data.name || `Profile-${Date.now()}`;
         const uniqueName = generateUniqueName(baseName);
         const newProfile = {
@@ -185,6 +196,9 @@ async function handleApiRequest(method, pathname, body, params) {
         // If name changed, ensure uniqueness
         if (data.name && data.name !== profile.name) {
             data.name = generateUniqueName(data.name);
+        }
+        if (Object.prototype.hasOwnProperty.call(data, 'fingerprint')) {
+            data.fingerprint = mergeFingerprint(profile.fingerprint, data.fingerprint, { fitMissingWindowToWorkArea: true });
         }
         profiles[idx] = { ...profiles[idx], ...data };
         await fs.writeJson(PROFILES_FILE, profiles);
@@ -316,7 +330,10 @@ async function handleApiRequest(method, pathname, body, params) {
                             name,
                             proxyStr: item.proxyStr || '',
                             tags: item.tags || [],
-                            fingerprint: item.fingerprint || await generateFingerprint({}),
+                            fingerprint: normalizeFingerprintForStorage(
+                                item.fingerprint || createManagedFingerprint({}),
+                                { fitMissingWindowToWorkArea: true }
+                            ),
                             createdAt: Date.now()
                         };
                         profiles.push(newProfile);
@@ -341,6 +358,10 @@ async function handleApiRequest(method, pathname, body, params) {
                 for (const profile of backupData.profiles || []) {
                     const name = generateUniqueName(profile.name);
                     const newProfile = { ...profile, id: uuidv4(), name };
+                    newProfile.fingerprint = normalizeFingerprintForStorage(
+                        newProfile.fingerprint || createManagedFingerprint({}),
+                        { fitMissingWindowToWorkArea: true }
+                    );
                     profiles.push(newProfile);
                     imported++;
                 }
@@ -420,6 +441,170 @@ async function waitForTcpPort(host, port, timeoutMs = 6000, shouldAbort = null) 
         await _sleep(200);
     }
     return false;
+}
+
+async function waitForTcpPortClosed(host, port, timeoutMs = 4000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        const open = await new Promise((resolve) => {
+            const sock = net.connect({ host, port }, () => { try { sock.destroy(); } catch (e) { } resolve(true); });
+            sock.on('error', () => resolve(false));
+        });
+        if (!open) return true;
+        await _sleep(120);
+    }
+    return false;
+}
+
+function detectProxyType(proxyStr) {
+    const raw = String(proxyStr || '').trim();
+    if (!raw) return 'DIRECT';
+    const m = raw.match(/^([a-z0-9+.-]+):\/\//i);
+    if (m && m[1]) return String(m[1]).toUpperCase();
+    if (raw.includes(':') && !raw.includes('://')) return 'SOCKS';
+    return 'UNKNOWN';
+}
+
+function parsePositiveInt(value, fallback) {
+    const num = Number.parseInt(value, 10);
+    return Number.isFinite(num) && num > 0 ? num : fallback;
+}
+
+function isPlainObject(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function deepMergeObjects(base, patch) {
+    const source = isPlainObject(base) ? base : {};
+    const delta = isPlainObject(patch) ? patch : {};
+    const out = { ...source };
+
+    for (const [key, value] of Object.entries(delta)) {
+        if (isPlainObject(value) && isPlainObject(source[key])) out[key] = deepMergeObjects(source[key], value);
+        else out[key] = value;
+    }
+
+    return out;
+}
+
+function sanitizeSize(size, fallback) {
+    const base = fallback || DEFAULT_BROWSER_WINDOW;
+    return {
+        width: parsePositiveInt(size && size.width, base.width),
+        height: parsePositiveInt(size && size.height, base.height),
+    };
+}
+
+function getPreferredWorkAreaBounds() {
+    const fallback = { x: 0, y: 0, width: DEFAULT_FINGERPRINT_SCREEN.width, height: DEFAULT_FINGERPRINT_SCREEN.height };
+    try {
+        if (!app || typeof app.isReady !== 'function' || !app.isReady()) return fallback;
+
+        let display = null;
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            display = screen.getDisplayMatching(mainWindow.getBounds());
+        }
+
+        if (!display && BrowserWindow.getFocusedWindow) {
+            const focused = BrowserWindow.getFocusedWindow();
+            if (focused && !focused.isDestroyed()) {
+                display = screen.getDisplayMatching(focused.getBounds());
+            }
+        }
+
+        if (!display && screen.getCursorScreenPoint && screen.getDisplayNearestPoint) {
+            display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+        }
+
+        if (!display && screen.getPrimaryDisplay) display = screen.getPrimaryDisplay();
+        const workArea = (display && display.workArea) || fallback;
+        return {
+            x: Number.isFinite(workArea.x) ? workArea.x : 0,
+            y: Number.isFinite(workArea.y) ? workArea.y : 0,
+            width: parsePositiveInt(workArea.width, fallback.width),
+            height: parsePositiveInt(workArea.height, fallback.height),
+        };
+    } catch (e) {
+        return fallback;
+    }
+}
+
+function fitWindowSizeToWorkArea(size, workArea = getPreferredWorkAreaBounds()) {
+    const area = {
+        x: Number.isFinite(workArea && workArea.x) ? workArea.x : 0,
+        y: Number.isFinite(workArea && workArea.y) ? workArea.y : 0,
+        width: parsePositiveInt(workArea && workArea.width, DEFAULT_FINGERPRINT_SCREEN.width),
+        height: parsePositiveInt(workArea && workArea.height, DEFAULT_FINGERPRINT_SCREEN.height),
+    };
+    const raw = sanitizeSize(size, DEFAULT_BROWSER_WINDOW);
+    const marginX = area.width >= 1440 ? 80 : 48;
+    const marginY = area.height >= 900 ? 96 : 64;
+
+    let maxWidth = area.width - marginX;
+    let maxHeight = area.height - marginY;
+    if (maxWidth < 320) maxWidth = area.width;
+    if (maxHeight < 240) maxHeight = area.height;
+
+    maxWidth = Math.max(320, Math.min(maxWidth, area.width));
+    maxHeight = Math.max(240, Math.min(maxHeight, area.height));
+
+    return {
+        width: Math.max(Math.min(raw.width, maxWidth), Math.min(320, maxWidth)),
+        height: Math.max(Math.min(raw.height, maxHeight), Math.min(240, maxHeight)),
+    };
+}
+
+function normalizeFingerprintForStorage(fingerprint, options = {}) {
+    const next = isPlainObject(fingerprint) ? deepMergeObjects({}, fingerprint) : {};
+    const screenSize = sanitizeSize(next.screen, DEFAULT_FINGERPRINT_SCREEN);
+    const shouldFitWindow = !!options.fitWindowToWorkArea;
+    const shouldFitMissingWindow = !!options.fitMissingWindowToWorkArea;
+    const workArea = (shouldFitWindow || shouldFitMissingWindow) ? (options.workArea || getPreferredWorkAreaBounds()) : null;
+    const defaultWindow = shouldFitMissingWindow ? fitWindowSizeToWorkArea(screenSize, workArea) : screenSize;
+    const windowSize = next.window ? sanitizeSize(next.window, defaultWindow) : defaultWindow;
+
+    next.screen = screenSize;
+    next.window = shouldFitWindow ? fitWindowSizeToWorkArea(windowSize, workArea) : windowSize;
+    return next;
+}
+
+function mergeFingerprint(baseFingerprint, patchFingerprint, options = {}) {
+    const merged = deepMergeObjects(
+        isPlainObject(baseFingerprint) ? baseFingerprint : {},
+        isPlainObject(patchFingerprint) ? patchFingerprint : {}
+    );
+    return normalizeFingerprintForStorage(merged, options);
+}
+
+function createManagedFingerprint(options = {}) {
+    const base = generateFingerprint(options);
+    return normalizeFingerprintForStorage(base, { ...options, fitMissingWindowToWorkArea: true, fitWindowToWorkArea: true });
+}
+
+async function applyBrowserWindowBounds(browser, workArea, windowSize, options = {}) {
+    if (!browser) return null;
+    const area = workArea || getPreferredWorkAreaBounds();
+    const size = fitWindowSizeToWorkArea(windowSize, area);
+    const left = area.x + Math.max(0, Math.floor((area.width - size.width) / 2));
+    const top = area.y + Math.max(0, Math.floor((area.height - size.height) / 2));
+
+    try {
+        const pageTarget = await browser.waitForTarget(t => t.type() === 'page', { timeout: 5000 }).catch(() => null);
+        if (!pageTarget) return size;
+
+        const session = await pageTarget.createCDPSession();
+        const { windowId } = await session.send('Browser.getWindowForTarget');
+        await session.send('Browser.setWindowBounds', {
+            windowId,
+            bounds: { windowState: 'normal', left, top, width: size.width, height: size.height }
+        });
+
+        if (options.minimize) {
+            await session.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } });
+        }
+    } catch (e) { }
+
+    return size;
 }
 
 async function promptSshHostKeyDecision({ host, port, fingerprint, isUpdate, raw } = {}) {
@@ -567,10 +752,10 @@ function plinkSupportsLegacyStdioPrompts(plinkPath) {
     return supported;
 }
 
-async function startSshDynamicProxy(proxyStr, profileDir) {
+async function startSshDynamicProxy(proxyStr, profileDir, options = {}) {
     const cfg = parseSshProxy(proxyStr);
-
-    const localPort = await getPort();
+    const preferredLocalPort = Number.parseInt(options.preferredLocalPort, 10);
+    const localPort = (Number.isFinite(preferredLocalPort) && preferredLocalPort > 0) ? preferredLocalPort : await getPort();
     const knownHosts = path.join(profileDir, 'known_hosts');
     const logPath = path.join(profileDir, 'ssh_run.log');
     const logFd = fs.openSync(logPath, 'a');
@@ -711,7 +896,7 @@ async function startSshDynamicProxy(proxyStr, profileDir) {
             throw new Error(`SSH tunnel not ready (check ${logPath})`);
         }
         tryUnlink(pwFile);
-        return { pid: proc.pid, localPort, logFd };
+        return { pid: proc.pid, localPort, logFd, child: proc, logPath };
     }
 
     const cmd = process.platform === 'win32' ? 'ssh.exe' : 'ssh';
@@ -747,7 +932,106 @@ async function startSshDynamicProxy(proxyStr, profileDir) {
         try { fs.closeSync(logFd); } catch (e) { }
         throw new Error(`SSH tunnel not ready (check ${logPath})`);
     }
-    return { pid: proc.pid, localPort, logFd };
+    return { pid: proc.pid, localPort, logFd, child: proc, logPath };
+}
+
+function buildRuntimeSnapshot(profile, proc) {
+    const running = !!(proc && proc.browser && proc.browser.isConnected && proc.browser.isConnected());
+    const effectiveProxyStr = String((proc && proc.originalProxyStr) || (profile && profile.proxyStr) || '').trim();
+    const isSsh = effectiveProxyStr.startsWith('ssh://');
+    const proxyType = detectProxyType(effectiveProxyStr);
+    const ws = running && proc && proc.browser && proc.browser.wsEndpoint ? proc.browser.wsEndpoint() : null;
+    const httpEndpoint = running && proc && proc.remoteDebuggingEnabled && profile && profile.debugPort
+        ? `http://${LOCAL_API_HOST}:${profile.debugPort}`
+        : null;
+
+    return {
+        running,
+        ws,
+        http: httpEndpoint,
+        debugPort: running && proc && proc.remoteDebuggingEnabled ? ((profile && profile.debugPort) || undefined) : undefined,
+        localPort: running && proc ? (proc.localPort || undefined) : undefined,
+        sshLocalPort: running && proc ? (proc.sshLocalPort || undefined) : undefined,
+        proxyType,
+        canRestartSsh: !!(proc && isSsh),
+        sshState: isSsh ? String((proc && proc.sshState) || (proc && proc.sshPid ? 'running' : 'stopped')) : null,
+        sshLastError: isSsh ? String((proc && proc.sshLastError) || '') : '',
+    };
+}
+
+function bindSshLifecycle(profileId, child) {
+    if (!child || !child.pid) return;
+
+    child.once('exit', (code, signal) => {
+        const proc = activeProcesses[profileId];
+        if (!proc || proc.manualClosing || proc.sshRestarting) return;
+        if (proc.sshPid !== child.pid) return;
+
+        proc.sshPid = undefined;
+        proc.sshProc = null;
+        proc.sshState = 'stopped';
+        proc.sshLastError = `SSH exited (${code !== null ? `code ${code}` : (signal || 'unknown')})`;
+
+        if (proc.sshLogFd !== undefined) {
+            try { fs.closeSync(proc.sshLogFd); } catch (e) { }
+            proc.sshLogFd = undefined;
+        }
+    });
+
+    child.once('error', (err) => {
+        const proc = activeProcesses[profileId];
+        if (!proc || proc.manualClosing) return;
+        if (proc.sshPid !== child.pid) return;
+        proc.sshState = 'stopped';
+        proc.sshLastError = err && err.message ? err.message : String(err);
+    });
+}
+
+async function restartSshInternal(profileId) {
+    const proc = activeProcesses[profileId];
+    if (!proc) throw new Error('Profile not running');
+    if (!proc.browser || !proc.browser.isConnected || !proc.browser.isConnected()) throw new Error('Browser session is not connected');
+
+    const proxyStr = String(proc.originalProxyStr || '').trim();
+    if (!proxyStr.startsWith('ssh://')) throw new Error('Current profile is not using SSH proxy');
+
+    const profileDir = proc.profileDir || path.join(DATA_PATH, profileId);
+    const oldPid = proc.sshPid;
+    const oldLogFd = proc.sshLogFd;
+    const preferredLocalPort = proc.sshLocalPort;
+
+    proc.sshRestarting = true;
+    proc.sshState = 'reconnecting';
+    proc.sshLastError = '';
+    proc.sshPid = undefined;
+    proc.sshProc = null;
+    proc.sshLogFd = undefined;
+
+    await forceKill(oldPid);
+    if (oldLogFd !== undefined) {
+        try { fs.closeSync(oldLogFd); } catch (e) { }
+    }
+    if (preferredLocalPort) {
+        await waitForTcpPortClosed('127.0.0.1', preferredLocalPort, 4000).catch(() => false);
+    }
+
+    try {
+        const sshInfo = await startSshDynamicProxy(proxyStr, profileDir, { preferredLocalPort });
+        proc.sshPid = sshInfo.pid;
+        proc.sshProc = sshInfo.child || null;
+        proc.sshLogFd = sshInfo.logFd;
+        proc.sshLocalPort = sshInfo.localPort;
+        proc.sshState = 'running';
+        proc.sshLastError = '';
+        proc.sshRestarting = false;
+        bindSshLifecycle(profileId, sshInfo.child);
+        return sshInfo;
+    } catch (err) {
+        proc.sshRestarting = false;
+        proc.sshState = 'stopped';
+        proc.sshLastError = err && err.message ? err.message : String(err);
+        throw err;
+    }
 }
 
 function getChromiumPath() {
@@ -919,483 +1203,20 @@ function _sendHtml(res, statusCode, html) {
 }
 
 function _renderDashboardHtml(profileId) {
-    const safeId = String(profileId || '').replace(/[^\w-]/g, '');
-    return `<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>GeekEZ 仪表盘</title>
-  <style>
-    :root{
-      --bg:#1e1e2d;
-      --card:#2b2b40;
-      --text:#ffffff;
-      --muted:#a0a0ba;
-      --accent:#00e0ff;
-      --danger:#f64e60;
-      --ok:#27ae60;
-      --border:#3f4254;
-      --line:rgba(255,255,255,.08);
-      --shadow:rgba(0,0,0,.35);
+    const safeId = JSON.stringify(String(profileId || '').replace(/[^\w-]/g, ''));
+
+    try {
+        const template = fs.readFileSync(DASHBOARD_TEMPLATE_FILE, 'utf8');
+        const css = fs.readFileSync(DASHBOARD_CSS_FILE, 'utf8');
+        const js = fs.readFileSync(DASHBOARD_JS_FILE, 'utf8');
+        return template
+            .split('__PROFILE_ID__').join(safeId)
+            .split('__DASHBOARD_CSS__').join(css)
+            .split('__DASHBOARD_JS__').join(js);
+    } catch (e) {
+        const msg = e && e.message ? e.message : String(e);
+        return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>GeekEZ 仪表盘</title></head><body style="font-family:Segoe UI,Microsoft YaHei,sans-serif;background:#10151f;color:#fff;padding:24px;"><h1 style="margin:0 0 12px;">GeekEZ 仪表盘加载失败</h1><pre style="white-space:pre-wrap;background:#182233;border-radius:12px;padding:14px;border:1px solid rgba(255,255,255,.12);">${msg}</pre></body></html>`;
     }
-    *{box-sizing:border-box}
-    body{
-      margin:0;
-      color:var(--text);
-      font-family:'Segoe UI',system-ui,-apple-system,Roboto,'Microsoft YaHei',sans-serif;
-      background:
-        radial-gradient(1200px 700px at 15% 10%, rgba(0,224,255,.12), transparent 55%),
-        radial-gradient(900px 600px at 85% 0%, rgba(124,58,237,.18), transparent 55%),
-        var(--bg);
-    }
-    .wrap{max-width:1180px;margin:18px auto;padding:0 16px 28px}
-    .header{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;margin-top:8px}
-    .brand{display:flex;flex-direction:column;gap:4px}
-    .title{font-size:18px;font-weight:700;letter-spacing:.2px}
-    .meta{font-size:12px;color:var(--muted)}
-    .meta code{color:var(--text);background:rgba(0,0,0,.25);border:1px solid var(--line);padding:2px 6px;border-radius:6px}
-    .actions{display:flex;gap:8px;flex-wrap:wrap}
-    .btn{cursor:pointer;border:1px solid var(--border);background:rgba(0,0,0,.18);color:var(--text);border-radius:10px;padding:8px 10px;font-size:12px;line-height:1}
-    .btn:hover{border-color:rgba(0,224,255,.6);box-shadow:0 0 0 2px rgba(0,224,255,.12) inset}
-    .btn.primary{background:rgba(0,224,255,.14);border-color:rgba(0,224,255,.45)}
-    .btn:disabled{opacity:.5;cursor:not-allowed}
-    .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px;margin-top:12px}
-    .card{grid-column:span 12;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:0 10px 30px var(--shadow)}
-    .hero{display:flex;gap:12px;justify-content:space-between;align-items:stretch;flex-wrap:wrap}
-    .heroLeft{min-width:260px;flex:1}
-    .heroLabel{font-size:12px;color:var(--muted)}
-    .heroIpRow{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-top:6px}
-    .heroIp{font-size:34px;font-weight:800;letter-spacing:.5px;text-shadow:0 0 18px rgba(0,224,255,.16)}
-    .pill{display:inline-flex;gap:6px;align-items:center;padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.18);font-size:12px}
-    .dot{width:8px;height:8px;border-radius:50%}
-    .dot.ok{background:var(--ok)}
-    .dot.bad{background:var(--danger)}
-    .heroSub{margin-top:6px;font-size:12px;color:var(--muted)}
-    .heroRight{display:flex;gap:8px;align-items:flex-start;justify-content:flex-end;flex-wrap:wrap}
-    .kv{display:grid;grid-template-columns:repeat(12,1fr);gap:10px}
-    .item{grid-column:span 12}
-    @media (min-width:920px){
-      .span6{grid-column:span 6}
-      .span12{grid-column:span 12}
-      .item.half{grid-column:span 6}
-      .item.third{grid-column:span 4}
-    }
-    .k{color:var(--muted);font-size:12px}
-    .v{font-size:13px;word-break:break-word}
-    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Courier New',monospace}
-    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-    .link{color:#a6c8ff;text-decoration:none}
-    .link:hover{text-decoration:underline}
-    .copy{cursor:pointer;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.18);color:var(--text);border-radius:8px;padding:5px 8px;font-size:12px}
-    .copy:hover{border-color:rgba(0,224,255,.6)}
-    pre{margin:10px 0 0;padding:12px;border-radius:12px;overflow:auto;background:rgba(0,0,0,.22);border:1px solid var(--line);font-size:12px;line-height:1.35}
-    details{margin-top:10px}
-    summary{cursor:pointer;color:var(--text);font-weight:600}
-    .err{margin-top:12px;color:var(--danger);white-space:pre-wrap}
-    .otpBox{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-    .otpCode{font-size:24px;font-weight:800;letter-spacing:2px}
-    .bar{position:relative;height:8px;flex:1;min-width:120px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;border:1px solid rgba(255,255,255,.10)}
-    .bar>div{height:100%;background:rgba(0,224,255,.55);width:0%}
-  </style>
-  <script>window.__PROFILE_ID__=${JSON.stringify(safeId)};</script>
-</head>
-<body>
-  <div class="wrap">
-    <div class="header">
-      <div class="brand">
-        <div class="title">GeekEZ 仪表盘</div>
-        <div class="meta">Profile: <code id="pid"></code> · API: <span id="api"></span></div>
-      </div>
-      <div class="actions">
-        <button class="btn primary" id="btnAll">刷新全部</button>
-        <button class="btn" id="btnIp">刷新 IP</button>
-        <button class="btn" id="btnNet">刷新网络信息</button>
-        <button class="btn" id="btnCopyWs">复制 WS</button>
-      </div>
-    </div>
-
-    <div class="grid">
-      <div class="card hero">
-        <div class="heroLeft">
-          <div class="heroLabel">代理出口 IP</div>
-          <div class="heroIpRow">
-            <div class="heroIp" id="ip">-</div>
-            <span class="pill"><span class="dot" id="dotRun"></span><span id="runText">-</span></span>
-          </div>
-          <div class="heroSub" id="ipMeta">来源: -</div>
-          <div class="heroSub">名称: <span id="name">-</span></div>
-          <div class="heroSub">代理: <span class="mono" id="proxyMasked">-</span></div>
-        </div>
-        <div class="heroRight">
-          <button class="btn" id="btnCopyIp">复制 IP</button>
-          <button class="btn" id="btnCopyProxy">复制代理</button>
-          <button class="btn" id="btnCopyProfile">复制 ProfileID</button>
-        </div>
-      </div>
-
-      <div class="card span6">
-        <div class="row" style="justify-content:space-between">
-          <div class="k">网络信息</div>
-          <span class="pill">IP: <span id="netIp">-</span></span>
-        </div>
-        <div class="kv" style="margin-top:10px">
-          <div class="item half"><div class="k">位置</div><div class="v" id="loc">-</div></div>
-          <div class="item half"><div class="k">时区</div><div class="v" id="tz">-</div></div>
-          <div class="item half"><div class="k">ASN / 组织</div><div class="v" id="org">-</div></div>
-          <div class="item half"><div class="k">坐标</div><div class="v" id="geo">-</div></div>
-          <div class="item half"><div class="k">邮编</div><div class="v" id="postal">-</div></div>
-          <div class="item half"><div class="k">来源</div><div class="v" id="netSource">-</div></div>
-        </div>
-      </div>
-
-      <div class="card span6">
-        <div class="k">运行 / 调试</div>
-        <div class="kv" style="margin-top:10px">
-          <div class="item"><div class="k">WS</div><div class="row"><div class="v mono" id="ws">-</div><button class="copy" id="copyWs">复制</button></div></div>
-          <div class="item"><div class="k">HTTP</div><div class="row"><div class="v mono" id="http">-</div><button class="copy" id="copyHttp">复制</button></div></div>
-          <div class="item third"><div class="k">debugPort</div><div class="v mono" id="debugPort">-</div></div>
-          <div class="item third"><div class="k">localPort</div><div class="v mono" id="localPort">-</div></div>
-          <div class="item third"><div class="k">sshLocalPort</div><div class="v mono" id="sshLocalPort">-</div></div>
-        </div>
-      </div>
-
-      <div class="card span6">
-        <div class="k">Profile 信息</div>
-        <div class="kv" style="margin-top:10px">
-          <div class="item half"><div class="k">名称</div><div class="v" id="pName">-</div></div>
-          <div class="item half"><div class="k">创建时间</div><div class="v" id="createdAt">-</div></div>
-          <div class="item"><div class="k">备注</div><div class="row"><div class="v" id="remark">-</div><button class="copy" id="copyRemark">复制</button></div></div>
-          <div class="item half"><div class="k">preProxyOverride</div><div class="v mono" id="preProxyOverride">-</div></div>
-          <div class="item half"><div class="k">标签</div><div class="v" id="tags">-</div></div>
-        </div>
-      </div>
-
-      <div class="card span6" id="acctCard" style="display:none">
-        <div class="k">账号 / 2FA</div>
-        <div class="kv" style="margin-top:10px">
-          <div class="item half"><div class="k">邮箱</div><div class="v mono" id="acctEmail">-</div></div>
-          <div class="item half"><div class="k">辅助邮箱</div><div class="v mono" id="acctAux">-</div></div>
-          <div class="item">
-            <div class="k">动态码</div>
-            <div class="otpBox">
-              <div class="otpCode mono" id="otpCode">------</div>
-              <div class="pill">剩余 <span id="otpRemain">-</span>s</div>
-              <button class="copy" id="copyOtp">复制</button>
-              <a class="link" id="otpFallback" href="#" target="_blank" rel="noreferrer" style="display:none">2fa.show</a>
-              <div class="bar" title="倒计时"><div id="otpBar"></div></div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card span12">
-        <details>
-          <summary>指纹配置</summary>
-          <pre id="fingerprint">-</pre>
-        </details>
-        <details>
-          <summary>浏览器信息</summary>
-          <pre id="browserInfo">-</pre>
-        </details>
-        <div class="err" id="err"></div>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    const profileId = window.__PROFILE_ID__ || '';
-    const apiBase = location.origin;
-    const $ = (id) => document.getElementById(id);
-
-    function pretty(o) { return JSON.stringify(o, null, 2); }
-    function setErr(msg) { $('err').textContent = msg || ''; }
-
-    function setText(id, text) {
-      const el = $(id);
-      if (!el) return;
-      el.textContent = (text === undefined || text === null || text === '') ? '-' : String(text);
-    }
-
-    function fmtTime(ms) {
-      const n = Number(ms);
-      if (!Number.isFinite(n) || n <= 0) return '-';
-      try { return new Date(n).toLocaleString(); } catch (e) { return String(ms); }
-    }
-
-    function maskProxy(proxyStr) {
-      const raw = String(proxyStr || '').trim();
-      if (!raw) return '';
-      try {
-        const u = new URL(raw);
-        const auth = u.username ? (decodeURIComponent(u.username) + (u.password ? ':***' : '') + '@') : '';
-        const host = u.hostname + (u.port ? ':' + u.port : '');
-        const q = u.search || '';
-        return u.protocol + '//' + auth + host + q;
-      } catch (e) {
-        return raw;
-      }
-    }
-
-    async function copyText(text) {
-      const s = String(text || '');
-      if (!s) return;
-      try {
-        await navigator.clipboard.writeText(s);
-      } catch (e) {
-        try {
-          const ta = document.createElement('textarea');
-          ta.value = s;
-          ta.style.position = 'fixed';
-          ta.style.left = '-9999px';
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand('copy');
-          ta.remove();
-        } catch (e2) {
-          prompt('复制：', s);
-        }
-      }
-    }
-
-    async function getJson(path) {
-      const res = await fetch(apiBase + path, { cache: 'no-store' });
-      const json = await res.json().catch(() => ({}));
-      if (!json || json.success !== true) throw new Error((json && (json.error || json.msg)) || 'API error');
-      return json.data;
-    }
-
-    let totpTimer = null;
-    let currentSecret = null;
-
-    function stopTotp() {
-      if (totpTimer) clearInterval(totpTimer);
-      totpTimer = null;
-      currentSecret = null;
-      $('acctCard').style.display = 'none';
-    }
-
-    function base32ToBytes(input) {
-      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-      const clean = String(input || '').toUpperCase().replace(/[^A-Z2-7]/g, '');
-      let bits = 0;
-      let value = 0;
-      const out = [];
-      for (const ch of clean) {
-        const idx = alphabet.indexOf(ch);
-        if (idx < 0) continue;
-        value = (value << 5) | idx;
-        bits += 5;
-        while (bits >= 8) {
-          out.push((value >>> (bits - 8)) & 0xff);
-          bits -= 8;
-        }
-      }
-      return new Uint8Array(out);
-    }
-
-    async function computeTotp(secret) {
-      if (!secret) return null;
-      if (!window.crypto || !crypto.subtle) return null;
-      try {
-        const keyBytes = base32ToBytes(secret);
-        if (!keyBytes || !keyBytes.length) return null;
-
-        const counter = Math.floor(Date.now() / 30000);
-        const buf = new ArrayBuffer(8);
-        const dv = new DataView(buf);
-        dv.setUint32(0, 0, false);
-        dv.setUint32(4, counter, false);
-
-        const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
-        const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, buf));
-        const off = sig[sig.length - 1] & 0x0f;
-        const bin = ((sig[off] & 0x7f) << 24) | ((sig[off + 1] & 0xff) << 16) | ((sig[off + 2] & 0xff) << 8) | (sig[off + 3] & 0xff);
-        return String(bin % 1000000).padStart(6, '0');
-      } catch (e) {
-        return null;
-      }
-    }
-
-    function startTotp(email, aux, secret) {
-      $('acctCard').style.display = '';
-      setText('acctEmail', email);
-      setText('acctAux', aux);
-
-      currentSecret = secret;
-
-      const fallback = $('otpFallback');
-      fallback.style.display = 'none';
-      fallback.href = '#';
-
-      $('copyOtp').onclick = async () => {
-        const code = $('otpCode').textContent;
-        if (code && code !== '------' && code !== 'ERR') await copyText(code);
-      };
-
-      const tick = async () => {
-        const remain = 30 - (Math.floor(Date.now() / 1000) % 30);
-        setText('otpRemain', remain);
-        $('otpBar').style.width = (remain / 30 * 100).toFixed(0) + '%';
-
-        const code = await computeTotp(currentSecret);
-        if (code) {
-          setText('otpCode', code);
-        } else {
-          setText('otpCode', 'ERR');
-          fallback.style.display = '';
-          fallback.href = 'https://2fa.show/2fa/' + encodeURIComponent(currentSecret);
-        }
-      };
-
-      tick();
-      if (totpTimer) clearInterval(totpTimer);
-      totpTimer = setInterval(tick, 1000);
-    }
-
-    function setRunning(running) {
-      const dot = $('dotRun');
-      const txt = $('runText');
-      if (running) {
-        dot.className = 'dot ok';
-        txt.textContent = '运行中';
-      } else {
-        dot.className = 'dot bad';
-        txt.textContent = '未运行';
-      }
-    }
-
-    async function refreshProfile() {
-      const p = await getJson('/profiles/' + encodeURIComponent(profileId));
-      setText('pid', profileId || '(none)');
-      setText('api', apiBase);
-
-      setText('name', p.name || '-');
-      setText('pName', p.name || '-');
-      setText('createdAt', fmtTime(p.createdAt));
-      setText('remark', p.remark || '-');
-      setText('preProxyOverride', p.preProxyOverride || '-');
-      setText('tags', Array.isArray(p.tags) && p.tags.length ? p.tags.join(', ') : '-');
-
-      setText('proxyMasked', maskProxy(p.proxyStr || '') || '-');
-
-      $('btnCopyProxy').onclick = async () => { await copyText(p.proxyStr || ''); };
-      $('btnCopyProfile').onclick = async () => { await copyText(profileId); };
-      $('copyRemark').onclick = async () => { await copyText(p.remark || ''); };
-
-      setText('fingerprint', pretty(p.fingerprint || {}));
-
-      const remark = String(p.remark || '');
-      const parts = remark.split('----').map(s => String(s || '').trim());
-      if (parts.length >= 3) {
-        const email = parts[0] || '';
-        const secret = parts[parts.length - 1] || '';
-        const aux = (parts.length >= 4) ? (parts[2] || '') : '';
-        if (email && secret) startTotp(email, aux, secret);
-        else stopTotp();
-      } else {
-        stopTotp();
-      }
-
-      return p;
-    }
-
-    async function refreshRuntime() {
-      const r = await getJson('/profiles/' + encodeURIComponent(profileId) + '/runtime').catch(() => ({ running: false }));
-      setRunning(!!r.running);
-
-      const ws = r.ws || '';
-      const http = r.http || '';
-      setText('ws', ws || '-');
-      setText('http', http || '-');
-      setText('debugPort', r.debugPort || '-');
-      setText('localPort', r.localPort || '-');
-      setText('sshLocalPort', r.sshLocalPort || '-');
-
-      $('btnCopyWs').onclick = async () => { if (ws) await copyText(ws); };
-      $('copyWs').onclick = async () => { if (ws) await copyText(ws); };
-      $('copyHttp').onclick = async () => { if (http) await copyText(http); };
-
-      return r;
-    }
-
-    async function refreshIp() {
-      setText('ip', '...');
-      setText('ipMeta', '来源: ...');
-      $('btnCopyIp').onclick = null;
-
-      try {
-        const ip = await getJson('/profiles/' + encodeURIComponent(profileId) + '/ip');
-        setText('ip', ip.ip || '-');
-        setText('ipMeta', '来源: ' + (ip.source || '-'));
-        $('btnCopyIp').onclick = async () => { await copyText(ip.ip || ''); };
-      } catch (e) {
-        setText('ip', '-');
-        setText('ipMeta', '来源: -');
-      }
-    }
-
-    async function refreshNetinfo() {
-      setText('loc', '...');
-      setText('tz', '...');
-      setText('org', '...');
-      setText('geo', '...');
-      setText('postal', '...');
-      setText('netIp', '...');
-      setText('netSource', '...');
-
-      try {
-        const n = await getJson('/profiles/' + encodeURIComponent(profileId) + '/netinfo');
-        setText('netIp', n.ip || '-');
-        setText('loc', [n.city, n.region, n.country].filter(Boolean).join(', ') || '-');
-        setText('tz', n.timezone || '-');
-        setText('org', [n.asn, n.org].filter(Boolean).join(' ') || '-');
-        const lat = (n.latitude !== undefined && n.latitude !== null) ? String(n.latitude) : '';
-        const lon = (n.longitude !== undefined && n.longitude !== null) ? String(n.longitude) : '';
-        setText('geo', (lat && lon) ? (lat + ', ' + lon) : '-');
-        setText('postal', n.postal || '-');
-        setText('netSource', n.source || '-');
-      } catch (e) {
-        setText('netIp', '-');
-        setText('loc', '-');
-        setText('tz', '-');
-        setText('org', '-');
-        setText('geo', '-');
-        setText('postal', '-');
-        setText('netSource', '-');
-      }
-    }
-
-    async function refreshAll() {
-      setErr('');
-      if (!profileId) {
-        setErr('缺少 profile 参数（例如 /dashboard?profile=<id>）');
-        return;
-      }
-
-      setText('browserInfo', pretty({
-        userAgent: navigator.userAgent,
-        platform: navigator.platform,
-        language: navigator.language,
-        languages: navigator.languages,
-        webdriver: navigator.webdriver,
-        hardwareConcurrency: navigator.hardwareConcurrency,
-        deviceMemory: navigator.deviceMemory,
-        screen: { width: screen.width, height: screen.height, availWidth: screen.availWidth, availHeight: screen.availHeight, colorDepth: screen.colorDepth, pixelDepth: screen.pixelDepth },
-      }));
-
-      await Promise.all([refreshProfile(), refreshRuntime()]);
-      await Promise.all([refreshIp(), refreshNetinfo()]);
-    }
-
-    $('btnAll').onclick = () => refreshAll().catch(e => setErr(String(e && e.stack ? e.stack : e)));
-    $('btnIp').onclick = () => refreshIp().catch(e => setErr(String(e && e.stack ? e.stack : e)));
-    $('btnNet').onclick = () => refreshNetinfo().catch(e => setErr(String(e && e.stack ? e.stack : e)));
-
-    refreshAll().catch(e => setErr(String(e && e.stack ? e.stack : e)));
-  </script>
-</body>
-</html>`;
 }
 
 function _readJsonBody(req, maxBytes = 1024 * 1024) {
@@ -1447,7 +1268,10 @@ function startLocalApiServer() {
                     const data = await _readJsonBody(req);
 
                     const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
-                    const fingerprint = data.fingerprint || generateFingerprint({ chromeVersion: getBundledChromeVersion() });
+                    const fingerprint = normalizeFingerprintForStorage(
+                        data.fingerprint || createManagedFingerprint({ chromeVersion: getBundledChromeVersion() }),
+                        { fitMissingWindowToWorkArea: true }
+                    );
                     if (data.timezone) fingerprint.timezone = data.timezone;
                     else if (!fingerprint.timezone) fingerprint.timezone = "America/Los_Angeles";
                     if (data.city) fingerprint.city = data.city;
@@ -1489,20 +1313,8 @@ function startLocalApiServer() {
                 const running = !!(proc && proc.browser && proc.browser.isConnected && proc.browser.isConnected());
 
                 if (kind === 'runtime') {
-                    const ws = running && proc && proc.browser && proc.browser.wsEndpoint ? proc.browser.wsEndpoint() : null;
-                    const httpEndpoint = running && proc && proc.remoteDebuggingEnabled && profile.debugPort ? `http://${LOCAL_API_HOST}:${profile.debugPort}` : null;
-                    return _sendJson(res, 200, {
-                        success: true,
-                        data: {
-                            running,
-	                            ws,
-	                            http: httpEndpoint,
-	                            debugPort: running && proc && proc.remoteDebuggingEnabled ? (profile.debugPort || undefined) : undefined,
-	                            localPort: running && proc ? (proc.localPort || undefined) : undefined,
-	                            sshLocalPort: running && proc ? (proc.sshLocalPort || undefined) : undefined,
-	                        }
-	                    });
-	                }
+                    return _sendJson(res, 200, { success: true, data: buildRuntimeSnapshot(profile, proc) });
+                }
 
                 if (!running || !proc || !proc.localPort) return _sendJson(res, 400, { success: false, error: 'Profile not running' });
 
@@ -1613,7 +1425,7 @@ function startLocalApiServer() {
                 return _sendJson(res, 404, { success: false, error: 'Not Found' });
             }
 
-            const match = path.match(/^\/profiles\/([^/]+)(?:\/(open|close))?$/);
+            const match = path.match(/^\/profiles\/([^/]+)(?:\/(open|close|restart-ssh))?$/);
             if (match) {
                 const profileId = match[1];
                 const action = match[2];
@@ -1629,9 +1441,14 @@ function startLocalApiServer() {
 
                     if (req.method === 'PATCH') {
                         const patch = await _readJsonBody(req);
-                        const allowed = ['name', 'proxyStr', 'remark', 'tags', 'fingerprint', 'debugPort', 'preProxyOverride'];
+                        const allowed = ['name', 'proxyStr', 'remark', 'tags', 'debugPort', 'preProxyOverride'];
                         for (const k of allowed) {
                             if (Object.prototype.hasOwnProperty.call(patch, k)) profile[k] = patch[k];
+                        }
+                        if (Object.prototype.hasOwnProperty.call(patch, 'fingerprint')) {
+                            profile.fingerprint = mergeFingerprint(profile.fingerprint, patch.fingerprint, { fitMissingWindowToWorkArea: true });
+                        } else if (profile.fingerprint) {
+                            profile.fingerprint = normalizeFingerprintForStorage(profile.fingerprint, { fitMissingWindowToWorkArea: true });
                         }
                         await fs.writeJson(PROFILES_FILE, profiles);
                         return _sendJson(res, 200, { success: true, data: profile });
@@ -1657,6 +1474,11 @@ function startLocalApiServer() {
                 if (action === 'close') {
                     await closeProfileInternal(profileId, null);
                     return _sendJson(res, 200, { success: true });
+                }
+
+                if (action === 'restart-ssh') {
+                    await restartSshInternal(profileId);
+                    return _sendJson(res, 200, { success: true, data: buildRuntimeSnapshot(profile, activeProcesses[profileId]) });
                 }
             }
 
@@ -1757,7 +1579,7 @@ ipcMain.handle('test-proxy-latency', async (e, proxyStr) => {
     }
 });
 ipcMain.handle('set-title-bar-color', (e, colors) => { const win = BrowserWindow.fromWebContents(e.sender); if (win) { if (process.platform === 'win32') try { win.setTitleBarOverlay({ color: colors.bg, symbolColor: colors.symbol }); } catch (e) { } win.setBackgroundColor(colors.bg); } });
-ipcMain.handle('check-app-update', async () => { try { const data = await fetchJson('https://api.github.com/repos/EchoHS/GeekezBrowser/releases/latest'); if (!data || !data.tag_name) return { update: false }; const remote = data.tag_name.replace('v', ''); if (compareVersions(remote, app.getVersion()) > 0) { return { update: true, remote, url: 'https://browser.geekez.net/#downloads', notes: data.body }; } return { update: false }; } catch (e) { return { update: false, error: e.message }; } });
+ipcMain.handle('check-app-update', async () => { try { const data = await fetchJson(APP_RELEASES_API_URL); if (!data || !data.tag_name) return { update: false }; const remote = data.tag_name.replace('v', ''); if (compareVersions(remote, app.getVersion()) > 0) { return { update: true, remote, url: data.html_url || APP_RELEASES_URL, notes: data.body }; } return { update: false }; } catch (e) { return { update: false, error: e.message }; } });
 ipcMain.handle('check-xray-update', async () => { try { const data = await fetchJson('https://api.github.com/repos/XTLS/Xray-core/releases/latest'); if (!data || !data.tag_name) return { update: false }; const remoteVer = data.tag_name; const currentVer = await getLocalXrayVersion(); if (remoteVer !== currentVer) { let assetName = ''; const arch = os.arch(); const platform = os.platform(); if (platform === 'win32') assetName = `Xray-windows-${arch === 'x64' ? '64' : '32'}.zip`; else if (platform === 'darwin') assetName = `Xray-macos-${arch === 'arm64' ? 'arm64-v8a' : '64'}.zip`; else assetName = `Xray-linux-${arch === 'x64' ? '64' : '32'}.zip`; const downloadUrl = `https://gh-proxy.com/https://github.com/XTLS/Xray-core/releases/download/${remoteVer}/${assetName}`; return { update: true, remote: remoteVer.replace(/^v/, ''), downloadUrl }; } return { update: false }; } catch (e) { return { update: false }; } });
 ipcMain.handle('download-xray-update', async (e, url) => {
     const exeName = process.platform === 'win32' ? 'xray.exe' : 'xray';
@@ -1842,12 +1664,31 @@ ipcMain.handle('download-xray-update', async (e, url) => {
     }
 });
 ipcMain.handle('get-running-ids', () => Object.keys(activeProcesses));
-ipcMain.handle('generate-fingerprint', () => generateFingerprint({ chromeVersion: getBundledChromeVersion() }));
+ipcMain.handle('generate-fingerprint', () => createManagedFingerprint({ chromeVersion: getBundledChromeVersion() }));
 ipcMain.handle('get-profiles', async () => { if (!fs.existsSync(PROFILES_FILE)) return []; return fs.readJson(PROFILES_FILE); });
-ipcMain.handle('update-profile', async (event, updatedProfile) => { let profiles = await fs.readJson(PROFILES_FILE); const index = profiles.findIndex(p => p.id === updatedProfile.id); if (index > -1) { profiles[index] = updatedProfile; await fs.writeJson(PROFILES_FILE, profiles); return true; } return false; });
+ipcMain.handle('update-profile', async (event, updatedProfile) => {
+    let profiles = await fs.readJson(PROFILES_FILE);
+    const index = profiles.findIndex(p => p.id === updatedProfile.id);
+    if (index > -1) {
+        const currentProfile = profiles[index];
+        const nextProfile = { ...currentProfile, ...updatedProfile };
+        if (updatedProfile && Object.prototype.hasOwnProperty.call(updatedProfile, 'fingerprint')) {
+            nextProfile.fingerprint = mergeFingerprint(currentProfile.fingerprint, updatedProfile.fingerprint, { fitMissingWindowToWorkArea: true });
+        } else if (nextProfile.fingerprint) {
+            nextProfile.fingerprint = normalizeFingerprintForStorage(nextProfile.fingerprint, { fitMissingWindowToWorkArea: true });
+        }
+        profiles[index] = nextProfile;
+        await fs.writeJson(PROFILES_FILE, profiles);
+        return true;
+    }
+    return false;
+});
 ipcMain.handle('save-profile', async (event, data) => {
     const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
-    const fingerprint = data.fingerprint || generateFingerprint({ chromeVersion: getBundledChromeVersion() });
+    const fingerprint = normalizeFingerprintForStorage(
+        data.fingerprint || createManagedFingerprint({ chromeVersion: getBundledChromeVersion() }),
+        { fitMissingWindowToWorkArea: true }
+    );
 
     // Apply timezone
     if (data.timezone) fingerprint.timezone = data.timezone;
@@ -1878,6 +1719,8 @@ ipcMain.handle('save-profile', async (event, data) => {
 async function closeProfileInternal(id, sender) {
     const proc = activeProcesses[id];
     if (!proc) return false;
+    proc.manualClosing = true;
+    proc.sshRestarting = false;
     delete activeProcesses[id];
 
     await forceKill(proc.xrayPid);
@@ -2404,6 +2247,10 @@ ipcMain.handle('import-data', async () => {
                     const currentProfiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
                     data.profiles.forEach(p => {
                         const idx = currentProfiles.findIndex(cp => cp.id === p.id);
+                            p.fingerprint = normalizeFingerprintForStorage(
+                                p.fingerprint || createManagedFingerprint({}),
+                                { fitMissingWindowToWorkArea: true }
+                            );
                         if (idx > -1) currentProfiles[idx] = p;
                         else {
                             if (!p.id) p.id = uuidv4();
@@ -2434,6 +2281,10 @@ ipcMain.handle('import-data', async () => {
                 // 单个环境导入
                 const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
                 const newProfile = { ...data, id: uuidv4(), isSetup: false, createdAt: Date.now() };
+                newProfile.fingerprint = normalizeFingerprintForStorage(
+                    newProfile.fingerprint || createManagedFingerprint({}),
+                    { fitMissingWindowToWorkArea: true }
+                );
                 profiles.push(newProfile);
                 await fs.writeJson(PROFILES_FILE, profiles);
                 updated = true;
@@ -2525,11 +2376,19 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
                 const httpEndpoint = debugPort ? `http://${LOCAL_API_HOST}:${debugPort}` : null;
                 return { id: profileId, name, remark, ws, http: httpEndpoint, debugPort: debugPort || undefined, message: "环境已唤醒" };
             } catch (e) {
+                proc.manualClosing = true;
                 await forceKill(proc.xrayPid);
+                await forceKill(proc.sshPid);
+                if (proc.logFd !== undefined) { try { fs.closeSync(proc.logFd); } catch (e2) { } }
+                if (proc.sshLogFd !== undefined) { try { fs.closeSync(proc.sshLogFd); } catch (e2) { } }
                 delete activeProcesses[profileId];
             }
         } else {
+            proc.manualClosing = true;
             await forceKill(proc.xrayPid);
+            await forceKill(proc.sshPid);
+            if (proc.logFd !== undefined) { try { fs.closeSync(proc.logFd); } catch (e) { } }
+            if (proc.sshLogFd !== undefined) { try { fs.closeSync(proc.sshLogFd); } catch (e) { } }
             delete activeProcesses[profileId];
         }
         if (activeProcesses[profileId]) {
@@ -2557,9 +2416,23 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
     if (!profile) throw new Error('Profile not found');
 
     const bundledChromeVersion = getBundledChromeVersion();
-    if (!profile.fingerprint) profile.fingerprint = generateFingerprint({ chromeVersion: bundledChromeVersion });
+    let fingerprintChanged = false;
+    if (!profile.fingerprint) {
+        profile.fingerprint = createManagedFingerprint({ chromeVersion: bundledChromeVersion });
+        fingerprintChanged = true;
+    } else {
+        const normalizedFingerprint = normalizeFingerprintForStorage(profile.fingerprint, { fitMissingWindowToWorkArea: true });
+        if (JSON.stringify(normalizedFingerprint.screen) !== JSON.stringify(profile.fingerprint.screen)
+            || JSON.stringify(normalizedFingerprint.window) !== JSON.stringify(profile.fingerprint.window)) {
+            profile.fingerprint = { ...profile.fingerprint, screen: normalizedFingerprint.screen, window: normalizedFingerprint.window };
+            fingerprintChanged = true;
+        }
+    }
     if (!profile.fingerprint.languages) profile.fingerprint.languages = ['en-US', 'en'];
     if (bundledChromeVersion && ensureFingerprintChromeVersion(profile.fingerprint, bundledChromeVersion)) {
+        fingerprintChanged = true;
+    }
+    if (fingerprintChanged) {
         try { await fs.writeJson(PROFILES_FILE, profiles); } catch (e) { }
     }
 
@@ -2619,18 +2492,28 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
         // 优化：减少等待时间，Xray 通常 300ms 内就能启动
         await new Promise(resolve => setTimeout(resolve, 300));
 
+        const workArea = getPreferredWorkAreaBounds();
+        const launchFingerprint = normalizeFingerprintForStorage(profile.fingerprint, {
+            workArea,
+            fitMissingWindowToWorkArea: true,
+            fitWindowToWorkArea: true
+        });
+        const launchWindow = launchFingerprint.window || DEFAULT_BROWSER_WINDOW;
+
         // 0. Resolve Language (Fix: Resolve 'auto' BEFORE generating extension so inject script gets explicit language)
-        const targetLang = profile.fingerprint?.language && profile.fingerprint.language !== 'auto'
-            ? profile.fingerprint.language
+        const targetLang = launchFingerprint?.language && launchFingerprint.language !== 'auto'
+            ? launchFingerprint.language
             : 'en-US';
 
         // Update in-memory profile to ensure generateExtension writes the correct language to inject script
         profile.fingerprint.language = targetLang;
         profile.fingerprint.languages = [targetLang, targetLang.split('-')[0]];
+        launchFingerprint.language = targetLang;
+        launchFingerprint.languages = profile.fingerprint.languages;
 
         // 1. 生成 GeekEZ Guard 扩展（使用传递的水印样式）
         const style = watermarkStyle || 'enhanced'; // 默认使用增强水印
-        const extPath = await generateExtension(profileDir, profile.fingerprint, profile.name, style);
+        const extPath = await generateExtension(profileDir, launchFingerprint, profile.name, style);
 
         // 2. 获取用户自定义扩展
         const userExts = settings.userExtensions || [];
@@ -2643,7 +2526,7 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
 
         // 4. 构建启动参数（性能优化）
         // P1: 使用指纹中的 User-Agent
-        const userAgent = profile.fingerprint?.userAgent
+        const userAgent = launchFingerprint?.userAgent
             || (bundledChromeVersion ? buildDefaultUserAgent(bundledChromeVersion) : null)
             || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
@@ -2652,7 +2535,7 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
 	            '--proxy-bypass-list=127.0.0.1;localhost;[::1]',
 	            '--disable-quic',
 	            `--user-data-dir=${userDataDir}`,
-	            `--window-size=${profile.fingerprint?.window?.width || 1280},${profile.fingerprint?.window?.height || 800}`,
+	            `--window-size=${launchWindow.width},${launchWindow.height}`,
 	            '--restore-last-session',
 	            '--no-sandbox',
 	            '--disable-setuid-sandbox',
@@ -2715,8 +2598,8 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
 
         // 时区设置
         const env = { ...process.env };
-        if (profile.fingerprint?.timezone && profile.fingerprint.timezone !== 'Auto') {
-            env.TZ = profile.fingerprint.timezone;
+        if (launchFingerprint?.timezone && launchFingerprint.timezone !== 'Auto') {
+            env.TZ = launchFingerprint.timezone;
         }
 
         const browser = await puppeteer.launch({
@@ -2731,27 +2614,26 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
             env: env  // 注入环境变量
         });
 
-        if (isQuietLaunch) {
-            try {
-                const pageTarget = await browser.waitForTarget(t => t.type() === 'page', { timeout: 3000 }).catch(() => null);
-                if (pageTarget) {
-                    const session = await pageTarget.createCDPSession();
-                    const { windowId } = await session.send('Browser.getWindowForTarget');
-                    await session.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } });
-                }
-            } catch (e) { }
-        }
+        await applyBrowserWindowBounds(browser, workArea, launchWindow, { minimize: isQuietLaunch });
 
         activeProcesses[profileId] = {
             xrayPid: xrayProcess.pid,
             sshPid: sshInfo ? sshInfo.pid : undefined,
+            sshProc: sshInfo ? (sshInfo.child || null) : null,
             browser,
             logFd: logFd,  // 存储日志文件描述符，用于后续关闭
             sshLogFd: sshInfo ? sshInfo.logFd : undefined,
             localPort,
             sshLocalPort: sshInfo ? sshInfo.localPort : undefined,
-            remoteDebuggingEnabled
+            remoteDebuggingEnabled,
+            originalProxyStr: String(profile.proxyStr || '').trim(),
+            profileDir,
+            sshState: sshInfo ? 'running' : null,
+            sshLastError: '',
+            manualClosing: false,
+            sshRestarting: false,
         };
+        if (sshInfo && sshInfo.child) bindSshLifecycle(profileId, sshInfo.child);
         if (sender && !sender.isDestroyed()) sender.send('profile-status', { id: profileId, status: 'running' });
 
         if (settings.dashboardOnLaunch === true && !isQuietLaunch) {
@@ -2775,10 +2657,12 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
 
         browser.on('disconnected', async () => {
             if (activeProcesses[profileId]) {
-                const pid = activeProcesses[profileId].xrayPid;
-                const sshPid = activeProcesses[profileId].sshPid;
-                const logFd = activeProcesses[profileId].logFd;
-                const sshLogFd = activeProcesses[profileId].sshLogFd;
+                const proc = activeProcesses[profileId];
+                const pid = proc.xrayPid;
+                const sshPid = proc.sshPid;
+                const logFd = proc.logFd;
+                const sshLogFd = proc.sshLogFd;
+                proc.manualClosing = true;
 
                 // 关闭日志文件描述符
                 if (logFd !== undefined) {

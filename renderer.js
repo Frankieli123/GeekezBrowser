@@ -8,6 +8,8 @@ let inputCallback = null;
 let searchText = '';
 let viewMode = localStorage.getItem('geekez_view') || 'list';
 let sshHostKeyPromptReq = null;
+const APP_REPO_URL = 'https://github.com/Frankieli123/GeekezBrowser';
+const APP_API_DOCS_URL = `${APP_REPO_URL}/blob/main/docs/API.md`;
 
 // Custom City Dropdown Initialization (Matches Timezone Logic)
 function initCustomCityDropdown(inputId, dropdownId) {
@@ -746,7 +748,7 @@ function showUpdateConfirm(version, url, notes) {
     modal.style.display = 'flex';
 }
 
-function openGithub() { window.electronAPI.invoke('open-url', 'https://github.com/EchoHS/GeekezBrowser'); }
+function openGithub() { window.electronAPI.invoke('open-url', APP_REPO_URL); }
 
 function filterProfiles(text) {
     searchText = text.toLowerCase();
@@ -939,6 +941,57 @@ function remove(id) {
     showConfirm(t('confirmDel'), async () => { await window.electronAPI.deleteProfile(id); await loadProfiles(); });
 }
 
+function parseEditorSize(value, fallback) {
+    const num = Number.parseInt(value, 10);
+    return Number.isFinite(num) && num > 0 ? num : fallback;
+}
+
+function getEditorWorkArea() {
+    return {
+        width: parseEditorSize(window.screen && window.screen.availWidth, 1366),
+        height: parseEditorSize(window.screen && window.screen.availHeight, 768)
+    };
+}
+
+function fitWindowSizeForEditor(size, workArea = getEditorWorkArea()) {
+    const area = {
+        width: parseEditorSize(workArea && workArea.width, 1366),
+        height: parseEditorSize(workArea && workArea.height, 768)
+    };
+    const raw = {
+        width: parseEditorSize(size && size.width, 1280),
+        height: parseEditorSize(size && size.height, 800)
+    };
+    const marginX = area.width >= 1440 ? 80 : 48;
+    const marginY = area.height >= 900 ? 96 : 64;
+
+    let maxWidth = area.width - marginX;
+    let maxHeight = area.height - marginY;
+    if (maxWidth < 320) maxWidth = area.width;
+    if (maxHeight < 240) maxHeight = area.height;
+
+    return {
+        width: Math.max(Math.min(raw.width, maxWidth), Math.min(320, maxWidth)),
+        height: Math.max(Math.min(raw.height, maxHeight), Math.min(240, maxHeight))
+    };
+}
+
+function sanitizeEditorWindowSize(size, fallback) {
+    const base = fallback || { width: 1280, height: 800 };
+    return {
+        width: parseEditorSize(size && size.width, base.width),
+        height: parseEditorSize(size && size.height, base.height)
+    };
+}
+
+function resolveEditWindowSize(fp) {
+    const screenSize = {
+        width: parseEditorSize(fp && fp.screen && fp.screen.width, 1920),
+        height: parseEditorSize(fp && fp.screen && fp.screen.height, 1080)
+    };
+    return fp && fp.window ? sanitizeEditorWindowSize(fp.window, screenSize) : fitWindowSizeForEditor(screenSize);
+}
+
 async function openEditModal(id) {
     const profiles = await window.electronAPI.getProfiles();
     const p = profiles.find(x => x.id === id);
@@ -965,6 +1018,9 @@ async function openEditModal(id) {
     sel.value = p.preProxyOverride || 'default';
     document.getElementById('editResW').value = fp.screen?.width || 1920;
     document.getElementById('editResH').value = fp.screen?.height || 1080;
+    const editWindow = resolveEditWindowSize(fp);
+    document.getElementById('editWindowW').value = editWindow.width;
+    document.getElementById('editWindowH').value = editWindow.height;
 
     // Init Language Dropdown
     initCustomLanguageDropdown('editLanguage', 'editLanguageDropdown');
@@ -1168,8 +1224,16 @@ async function saveEditProfile() {
         p.preProxyOverride = document.getElementById('editPreProxyOverride').value;
 
         if (!p.fingerprint) p.fingerprint = {};
-        p.fingerprint.screen = { width: parseInt(document.getElementById('editResW').value), height: parseInt(document.getElementById('editResH').value) };
-        p.fingerprint.window = p.fingerprint.screen;
+        const screenSize = {
+            width: parseEditorSize(document.getElementById('editResW').value, 1920),
+            height: parseEditorSize(document.getElementById('editResH').value, 1080)
+        };
+        const windowSize = {
+            width: parseEditorSize(document.getElementById('editWindowW').value, screenSize.width),
+            height: parseEditorSize(document.getElementById('editWindowH').value, screenSize.height)
+        };
+        p.fingerprint.screen = screenSize;
+        p.fingerprint.window = sanitizeEditorWindowSize(windowSize, screenSize);
         const timezoneValue = document.getElementById('editTimezone').value;
         console.log('[saveEditProfile] Timezone value:', timezoneValue);
         p.fingerprint.timezone = timezoneValue === 'Auto (No Change)' ? 'Auto' : timezoneValue;
@@ -2150,7 +2214,7 @@ async function loadApiServerSetting() {
 }
 
 function openApiDocs() {
-    window.electronAPI.invoke('open-url', 'https://browser.geekez.net/docs.html#doc-api');
+    window.electronAPI.invoke('open-url', APP_API_DOCS_URL);
 }
 
 function switchSettingsTab(tabName) {
