@@ -138,6 +138,15 @@ function getInjectScript(fp, profileName, watermarkStyle) {
     return `
     (function() {
         try {
+            const __geekezLocalPage = (() => {
+                try {
+                    return /^(https?:\\/\\/)?(localhost|127\\.0\\.0\\.1|\\[::1\\])(:\\d+)?(\\/|$)/i.test(String(location && location.href || ''));
+                } catch (e) {
+                    return false;
+                }
+            })();
+            if (__geekezLocalPage) return;
+
             const fp = ${fpJson};
             const targetTimezone = fp.timezone || "America/Los_Angeles";
 

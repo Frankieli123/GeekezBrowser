@@ -2759,6 +2759,9 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
         if (sshInfo && sshInfo.child) bindSshLifecycle(profileId, sshInfo.child);
         if (sender && !sender.isDestroyed()) sender.send('profile-status', { id: profileId, status: 'running' });
 
+        const localApiPrefix = `http://${LOCAL_API_HOST}:${LOCAL_API_PORT}/`;
+        await cleanupStartupPages(browser, { preservedPrefixes: [localApiPrefix] });
+
         let dashboardUrl = '';
         if (settings.dashboardOnLaunch === true && !isQuietLaunch) {
             try {
@@ -2769,8 +2772,6 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
                 await page.bringToFront();
             } catch (e) { }
         }
-
-        await cleanupStartupPages(browser, { preservedPrefixes: dashboardUrl ? [dashboardUrl] : [] });
 
         // CDP Geolocation Removed in favor of Stealth JS Hook
         // 由于 CDP 本身会被检测，我们移除所有 Emulation.Overrides
