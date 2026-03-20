@@ -90,7 +90,34 @@ jobs:
       - name: Download Chrome
         run: npx @puppeteer/browsers install chrome@143.0.7499.169 --path resources/puppeteer
 
+      - name: Build (macOS with retry)
+        if: matrix.os == 'darwin'
+        shell: bash
+        run: |
+          attempts=3
+          for attempt in $(seq 1 $attempts); do
+            echo "macOS build attempt $attempt/$attempts"
+            if ${{ matrix.build_cmd }}; then
+              exit 0
+            fi
+            if [ "$attempt" -eq "$attempts" ]; then
+              exit 1
+            fi
+            echo "macOS dmg build failed, cleaning up before retry..."
+            if [ -d /Volumes ]; then
+              while IFS= read -r volume; do
+                [ -n "$volume" ] && hdiutil detach -force "$volume" || true
+              done < <(find /Volumes -maxdepth 1 -type d -name 'GeekEZ Browser*' 2>/dev/null)
+            fi
+            rm -rf dist
+            sleep 15
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
       - name: Build
+        if: matrix.os != 'darwin'
         run: ${{ matrix.build_cmd }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
