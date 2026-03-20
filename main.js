@@ -1251,7 +1251,7 @@ function loadSettings() {
     } catch (e) {
         console.error('Failed to load settings:', e);
     }
-    return { enableRemoteDebugging: false, dashboardOnLaunch: false, apiQuietLaunch: false };
+    return { enableRemoteDebugging: false, dashboardOnLaunch: false, apiQuietLaunch: false, backgroundMode: 'chromium' };
 }
 
 function saveSettings(settings) {
@@ -1922,7 +1922,7 @@ async function deleteProfileInternal(id) {
     return true;
 }
 ipcMain.handle('delete-profile', async (event, id) => deleteProfileInternal(id));
-ipcMain.handle('get-settings', async () => { if (fs.existsSync(SETTINGS_FILE)) return fs.readJson(SETTINGS_FILE); return { preProxies: [], mode: 'single', enablePreProxy: false, enableRemoteDebugging: false, dashboardOnLaunch: false, apiQuietLaunch: false }; });
+ipcMain.handle('get-settings', async () => { if (fs.existsSync(SETTINGS_FILE)) return fs.readJson(SETTINGS_FILE); return { preProxies: [], mode: 'single', enablePreProxy: false, enableRemoteDebugging: false, dashboardOnLaunch: false, apiQuietLaunch: false, backgroundMode: 'chromium' }; });
 ipcMain.handle('save-settings', async (e, settings) => { await fs.writeJson(SETTINGS_FILE, settings); return true; });
 ipcMain.handle('select-extension-folder', async () => {
     const { filePaths } = await dialog.showOpenDialog({
@@ -2458,7 +2458,8 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
         mode: 'single',
         enablePreProxy: false,
         dashboardOnLaunch: false,
-        apiQuietLaunch: false
+        apiQuietLaunch: false,
+        backgroundMode: 'chromium'
     }));
     const isQuietLaunch = isApiLaunch && settings.apiQuietLaunch;
 
@@ -2651,7 +2652,7 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
             || (bundledChromeVersion ? buildDefaultUserAgent(bundledChromeVersion) : null)
             || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-	        const launchArgs = [
+        const launchArgs = [
 	            `--proxy-server=socks5://127.0.0.1:${localPort}`,
 	            '--proxy-bypass-list=127.0.0.1;localhost;[::1]',
 	            '--disable-quic',
@@ -2672,13 +2673,18 @@ async function launchProfileInternal(profileId, watermarkStyle, sender, options 
             '--no-first-run',                    // 跳过首次运行向导
             '--no-default-browser-check',        // 跳过默认浏览器检查
             '--disable-session-crashed-bubble',  // 隐藏恢复会话提示
-            '--disable-background-timer-throttling', // 防止后台标签页被限速
-            '--disable-backgrounding-occluded-windows',
-            '--disable-renderer-backgrounding',
             '--disable-dev-shm-usage',           // 减少共享内存使用
             '--disk-cache-size=52428800',        // 限制磁盘缓存为 50MB
             '--media-cache-size=52428800'        // 限制媒体缓存为 50MB
         ];
+        const backgroundMode = String(settings.backgroundMode || 'chromium').trim();
+        if (backgroundMode === 'keep-active') {
+            launchArgs.push(
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding'
+            );
+        }
         if (isQuietLaunch && process.platform === 'win32') launchArgs.push('--start-minimized');
 
         // 5. Remote Debugging Port (if enabled)

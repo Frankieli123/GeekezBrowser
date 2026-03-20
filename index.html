@@ -1999,6 +1999,48 @@
                                 </div>
                             </div>
                         </label>
+
+                        <div style="margin-top:12px; display:flex; flex-direction:column; gap:10px;">
+                            <div style="font-size:12px; color:var(--text-secondary);" data-i18n="backgroundModeTitle">
+                                后台行为
+                            </div>
+                            <label
+                                style="display:flex; align-items:flex-start; gap:10px; padding:12px; border:1px solid var(--border); border-radius:6px; cursor:pointer; transition:0.2s;"
+                                onmouseover="this.style.borderColor='var(--accent)'"
+                                onmouseout="if(!this.querySelector('input').checked) this.style.borderColor='var(--border)'">
+                                <input type="radio" name="backgroundMode" value="chromium"
+                                    style="margin-top:3px; width:auto; cursor:pointer;"
+                                    onchange="saveBackgroundMode('chromium')">
+                                <div style="flex:1;">
+                                    <div style="font-weight:bold; margin-bottom:5px; color:var(--text-primary);"
+                                        data-i18n="backgroundModeChromiumLabel">
+                                        💤 Chromium 默认 (推荐)
+                                    </div>
+                                    <div style="font-size:11px; color:var(--text-secondary); line-height:1.5;"
+                                        data-i18n="backgroundModeChromiumDesc">
+                                        使用浏览器默认后台节流，降低空闲 CPU / 内存占用
+                                    </div>
+                                </div>
+                            </label>
+                            <label
+                                style="display:flex; align-items:flex-start; gap:10px; padding:12px; border:1px solid var(--border); border-radius:6px; cursor:pointer; transition:0.2s;"
+                                onmouseover="this.style.borderColor='var(--accent)'"
+                                onmouseout="if(!this.querySelector('input').checked) this.style.borderColor='var(--border)'">
+                                <input type="radio" name="backgroundMode" value="keep-active"
+                                    style="margin-top:3px; width:auto; cursor:pointer;"
+                                    onchange="saveBackgroundMode('keep-active')">
+                                <div style="flex:1;">
+                                    <div style="font-weight:bold; margin-bottom:5px; color:var(--text-primary);"
+                                        data-i18n="backgroundModeKeepActiveLabel">
+                                        ⚡ 保持后台活跃
+                                    </div>
+                                    <div style="font-size:11px; color:var(--text-secondary); line-height:1.5;"
+                                        data-i18n="backgroundModeKeepActiveDesc">
+                                        关闭后台节流，适合依赖后台定时任务的网页，但更耗资源
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
                     </div>
 
                     <!-- Watermark Style Section -->
@@ -2010,7 +2052,7 @@
                         </p>
 
                         <div style="display:flex; flex-direction:column; gap:12px;">
-                            <!-- 方案5: 增强水印 (默认) -->
+                            <!-- 增强水印 -->
                             <label
                                 style="display:flex; align-items:flex-start; gap:10px; padding:12px; border:1px solid var(--border); border-radius:6px; cursor:pointer; transition:0.2s;"
                                 onmouseover="this.style.borderColor='var(--accent)'"
@@ -2025,12 +2067,12 @@
                                     </div>
                                     <div style="font-size:11px; color:var(--text-secondary); line-height:1.5;"
                                         data-i18n="watermarkEnhancedDesc">
-                                        右下角显示，渐变背景 + 图标，轻微脉冲动画，不占用页面空间
+                                        右下角轻量卡片，仅在主页面显示，不再持续监听页面变化
                                     </div>
                                 </div>
                             </label>
 
-                            <!-- 方案1: 顶部横幅 -->
+                            <!-- 顶部条幅 -->
                             <label
                                 style="display:flex; align-items:flex-start; gap:10px; padding:12px; border:1px solid var(--border); border-radius:6px; cursor:pointer; transition:0.2s;"
                                 onmouseover="this.style.borderColor='var(--accent)'"
@@ -2045,7 +2087,7 @@
                                     </div>
                                     <div style="font-size:11px; color:var(--text-secondary); line-height:1.5;"
                                         data-i18n="watermarkBannerDesc">
-                                        页面顶部显示，非常醒目，可关闭，占用约40px空间
+                                        顶部右侧紧凑条幅，可关闭，尽量减少对网页内容的遮挡
                                     </div>
                                 </div>
                             </label>

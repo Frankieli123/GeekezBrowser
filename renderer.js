@@ -1974,6 +1974,7 @@ function openSettings() {
     loadWatermarkStyle();
     loadRemoteDebuggingSetting();
     loadLaunchSettings();
+    loadBackgroundMode();
     loadCustomArgsSetting();
     loadApiServerSetting();
     loadDataPathSetting();
@@ -2128,6 +2129,30 @@ async function saveLaunchSettings() {
     settings.dashboardOnLaunch = !!(dashCb && dashCb.checked);
     settings.apiQuietLaunch = !!(quietCb && quietCb.checked);
     await window.electronAPI.saveSettings(settings);
+}
+
+async function loadBackgroundMode() {
+    const settings = await window.electronAPI.getSettings();
+    const mode = settings.backgroundMode === 'keep-active' ? 'keep-active' : 'chromium';
+    const radios = document.getElementsByName('backgroundMode');
+    radios.forEach(radio => {
+        const active = radio.value === mode;
+        radio.checked = active;
+        radio.parentElement.style.borderColor = active ? 'var(--accent)' : 'var(--border)';
+    });
+}
+
+async function saveBackgroundMode(mode) {
+    const settings = await window.electronAPI.getSettings();
+    settings.backgroundMode = mode === 'chromium' ? 'chromium' : 'keep-active';
+    await window.electronAPI.saveSettings(settings);
+    const radios = document.getElementsByName('backgroundMode');
+    radios.forEach(radio => {
+        radio.parentElement.style.borderColor = radio.checked ? 'var(--accent)' : 'var(--border)';
+    });
+    showAlert(settings.backgroundMode === 'chromium'
+        ? (t('backgroundModeSavedChromium') || '已切换为 Chromium 默认后台模式，重启环境后生效')
+        : (t('backgroundModeSavedKeepActive') || '已切换为保持后台活跃模式，重启环境后生效'));
 }
 // Custom Args Settings
 async function saveCustomArgsSetting(enabled) {

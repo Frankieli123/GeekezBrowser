@@ -149,6 +149,13 @@ function getInjectScript(fp, profileName, watermarkStyle) {
 
             const fp = ${fpJson};
             const targetTimezone = fp.timezone || "America/Los_Angeles";
+            const isTopFrame = (() => {
+                try {
+                    return window.top === window;
+                } catch (e) {
+                    return false;
+                }
+            })();
 
             // Protection settings (default all enabled)
             const prot = fp.protection || {};
@@ -940,6 +947,7 @@ function getInjectScript(fp, profileName, watermarkStyle) {
             
             function createWatermark() {
                 try {
+                    if (!isTopFrame) return;
                     // 检查是否已存在水印（避免重复创建）
                     if (document.getElementById('geekez-watermark')) return;
                     
@@ -950,21 +958,21 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                     }
                     
                     if (watermarkStyle === 'banner') {
-                        // 方案1: 顶部横幅
                         const banner = document.createElement('div');
                         banner.id = 'geekez-watermark';
-                        banner.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; background: linear-gradient(135deg, rgba(102, 126, 234, 0.5), rgba(118, 75, 162, 0.5)); backdrop-filter: blur(10px); color: white; padding: 5px 20px; text-align: center; font-size: 12px; font-weight: 500; z-index: 2147483647; box-shadow: 0 2px 10px rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: center; gap: 8px; font-family: monospace;';
+                        banner.style.cssText = 'position: fixed; top: 12px; right: 12px; max-width: min(320px, calc(100vw - 24px)); background: linear-gradient(135deg, rgba(37, 99, 235, 0.92), rgba(79, 70, 229, 0.9)); color: #fff; padding: 8px 36px 8px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; z-index: 2147483647; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.18); display: flex; align-items: center; gap: 8px; font-family: "Segoe UI", monospace; border: 1px solid rgba(255,255,255,0.18); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; backdrop-filter: blur(10px);';
                         
                         const icon = document.createElement('span');
                         icon.textContent = '🔹';
-                        icon.style.cssText = 'font-size: 14px;';
+                        icon.style.cssText = 'font-size: 13px; flex: 0 0 auto;';
                         
                         const text = document.createElement('span');
                         text.textContent = '环境：${safeProfileName}';
+                        text.style.cssText = 'flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
                         
                         const closeBtn = document.createElement('button');
                         closeBtn.textContent = '×';
-                        closeBtn.style.cssText = 'position: absolute; right: 10px; background: rgba(255,255,255,0.2); border: none; color: white; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; font-size: 16px; line-height: 1; transition: background 0.2s; font-family: monospace;';
+                        closeBtn.style.cssText = 'position: absolute; top: 50%; right: 8px; transform: translateY(-50%); background: rgba(255,255,255,0.16); border: none; color: white; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; font-size: 14px; line-height: 1; transition: background 0.2s; font-family: monospace;';
                         closeBtn.onmouseover = function() { this.style.background = 'rgba(255,255,255,0.3)'; };
                         closeBtn.onmouseout = function() { this.style.background = 'rgba(255,255,255,0.2)'; };
                         closeBtn.onclick = function() { banner.style.display = 'none'; };
@@ -975,73 +983,30 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                         document.body.appendChild(banner);
                         
                     } else {
-                        // 方案5: 增强水印 (默认)
                         const watermark = document.createElement('div');
                         watermark.id = 'geekez-watermark';
-                        watermark.style.cssText = 'position: fixed; bottom: 16px; right: 16px; background: linear-gradient(135deg, rgba(102, 126, 234, 0.5), rgba(118, 75, 162, 0.5)); backdrop-filter: blur(10px); color: white; padding: 10px 16px; border-radius: 8px; font-size: 15px; font-weight: 600; z-index: 2147483647; pointer-events: none; user-select: none; box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4); display: flex; align-items: center; gap: 8px; font-family: monospace; animation: geekez-pulse 2s ease-in-out infinite;';
+                        watermark.style.cssText = 'position: fixed; right: 16px; bottom: 16px; max-width: min(340px, calc(100vw - 24px)); min-height: 42px; padding: 10px 14px 10px 12px; border-radius: 14px; background: linear-gradient(135deg, rgba(15, 23, 42, 0.82), rgba(30, 41, 59, 0.74)); backdrop-filter: blur(12px); color: #e5eefc; font-size: 13px; font-weight: 600; z-index: 2147483647; box-shadow: 0 14px 30px rgba(15, 23, 42, 0.22); display: flex; align-items: center; gap: 10px; font-family: "Segoe UI", monospace; border: 1px solid rgba(148, 163, 184, 0.22); pointer-events: none; user-select: none;';
                         
                         const icon = document.createElement('span');
-                        icon.textContent = '🎯';
-                        icon.style.cssText = 'font-size: 18px; animation: geekez-rotate 3s linear infinite;';
+                        icon.textContent = '●';
+                        icon.style.cssText = 'font-size: 12px; color: #38bdf8; text-shadow: 0 0 10px rgba(56, 189, 248, 0.55); flex: 0 0 auto;';
                         
+                        const textWrap = document.createElement('div');
+                        textWrap.style.cssText = 'display:flex; flex-direction:column; gap:2px; min-width:0;';
+
+                        const label = document.createElement('span');
+                        label.textContent = 'GeekEZ Profile';
+                        label.style.cssText = 'font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(191, 219, 254, 0.82);';
+
                         const text = document.createElement('span');
                         text.textContent = '${safeProfileName}';
-                        
+                        text.style.cssText = 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+
                         watermark.appendChild(icon);
-                        watermark.appendChild(text);
+                        textWrap.appendChild(label);
+                        textWrap.appendChild(text);
+                        watermark.appendChild(textWrap);
                         document.body.appendChild(watermark);
-                        
-                        // 添加动画样式
-                        if (!document.getElementById('geekez-watermark-styles')) {
-                            const style = document.createElement('style');
-                            style.id = 'geekez-watermark-styles';
-                            style.textContent = '@keyframes geekez-pulse { 0%, 100% { box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4); } 50% { box-shadow: 0 4px 25px rgba(102, 126, 234, 0.6); } } @keyframes geekez-rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }';
-                            document.head.appendChild(style);
-                        }
-                        
-                        // 自适应颜色函数（保留之前的功能）
-                        function updateWatermarkColor() {
-                            try {
-                                const rect = watermark.getBoundingClientRect();
-                                const x = rect.left + rect.width / 2;
-                                const y = rect.top + rect.height / 2;
-                                
-                                watermark.style.display = 'none';
-                                const elementBelow = document.elementFromPoint(x, y) || document.body;
-                                watermark.style.display = '';
-                                
-                                const bgColor = window.getComputedStyle(elementBelow).backgroundColor;
-                                const rgb = bgColor.match(/\\d+/g);
-                                
-                                if (rgb && rgb.length >= 3) {
-                                    const r = parseInt(rgb[0]);
-                                    const g = parseInt(rgb[1]);
-                                    const b = parseInt(rgb[2]);
-                                    const brightness = (r * 0.299 + g * 0.587 + b * 0.114);
-                                    
-                                    // 保持渐变背景，统一使用50%透明度
-                                    watermark.style.background = 'linear-gradient(135deg, rgba(102, 126, 234, 0.3), rgba(118, 75, 162, 0.3)';
-                                }
-                            } catch(e) { /* 忽略错误 */ }
-                        }
-                        
-                        setTimeout(updateWatermarkColor, 100);
-                        
-                        let colorUpdateTimer;
-                        function scheduleColorUpdate() {
-                            clearTimeout(colorUpdateTimer);
-                            colorUpdateTimer = setTimeout(updateWatermarkColor, 200);
-                        }
-                        
-                        window.addEventListener('scroll', scheduleColorUpdate, { passive: true });
-                        window.addEventListener('resize', scheduleColorUpdate, { passive: true });
-                        
-                        const observer = new MutationObserver(scheduleColorUpdate);
-                        observer.observe(document.body, { 
-                            attributes: true, 
-                            attributeFilter: ['style', 'class'],
-                            subtree: true 
-                        });
                     }
                     
                 } catch(e) { /* 静默失败，不影响页面 */ }
