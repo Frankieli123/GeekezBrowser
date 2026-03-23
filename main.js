@@ -12,10 +12,7 @@ const https = require('https');
 const os = require('os');
 const net = require('net');
 const crypto = require('crypto');
-const zlib = require('zlib');
-const { promisify } = require('util');
-const gzip = promisify(zlib.gzip);
-const gunzip = promisify(zlib.gunzip);
+const AdmZip = require('adm-zip');
 
 
 // Hardware acceleration enabled for better UI performance
@@ -243,52 +240,20 @@ async function handleApiRequest(method, pathname, body, params) {
     if (method === 'GET' && pathname === '/api/export/all') {
         const password = params.get('password');
         if (!password) return { status: 400, data: { success: false, error: 'Password required. Use ?password=yourpassword' } };
-
-        // Build backup data
-        const backupData = {
-            version: 1,
-            createdAt: Date.now(),
-            profiles: profiles.map(p => ({ ...p, fingerprint: cleanFingerprint ? cleanFingerprint(p.fingerprint) : p.fingerprint })),
-            preProxies: settings.preProxies || [],
-            subscriptions: settings.subscriptions || [],
-            browserData: {}
-        };
-
-        // Collect browser data
-        for (const profile of profiles) {
-            const profileDataDir = path.join(DATA_PATH, profile.id, 'browser_data');
-            if (fs.existsSync(profileDataDir)) {
-                const defaultDir = path.join(profileDataDir, 'Default');
-                if (fs.existsSync(defaultDir)) {
-                    const browserFiles = {};
-                    const filesToBackup = ['Bookmarks', 'Cookies', 'Login Data', 'Web Data', 'Preferences'];
-                    for (const fileName of filesToBackup) {
-                        const filePath = path.join(defaultDir, fileName);
-                        if (fs.existsSync(filePath)) {
-                            try {
-                                const content = await fs.readFile(filePath);
-                                browserFiles[fileName] = content.toString('base64');
-                            } catch (err) { }
-                        }
-                    }
-                    if (Object.keys(browserFiles).length > 0) {
-                        backupData.browserData[profile.id] = browserFiles;
-                    }
-                }
-            }
+        ensureProfilesStopped(profiles.map(p => p.id), profiles, '完整备份');
+        const bundle = await buildFullBackupBundle(profiles, settings);
+        try {
+            const zipBuffer = await fs.readFile(bundle.zipPath);
+            const encrypted = encryptData(zipBuffer, password);
+            return {
+                success: true,
+                data: encrypted.toString('base64'),
+                filename: `GeekEZ_FullBackup_${Date.now()}.geekez`,
+                profileCount: profiles.length
+            };
+        } finally {
+            try { await fs.remove(bundle.tempRoot); } catch (e) { }
         }
-
-        // Compress and encrypt
-        const jsonStr = JSON.stringify(backupData);
-        const compressed = await gzip(Buffer.from(jsonStr, 'utf8'));
-        const encrypted = encryptData(compressed, password);
-
-        return {
-            success: true,
-            data: encrypted.toString('base64'),
-            filename: `GeekEZ_FullBackup_${Date.now()}.geekez`,
-            profileCount: profiles.length
-        };
     }
 
     // GET /api/export/fingerprint - Export YAML fingerprints
@@ -350,26 +315,33 @@ async function handleApiRequest(method, pathname, body, params) {
 
             try {
                 const encrypted = Buffer.from(content, 'base64');
-                const decrypted = decryptData(encrypted, password);
-                const decompressed = await gunzip(decrypted);
-                const backupData = JSON.parse(decompressed.toString('utf8'));
-
-                let imported = 0;
-                for (const profile of backupData.profiles || []) {
-                    const name = generateUniqueName(profile.name);
-                    const newProfile = { ...profile, id: uuidv4(), name };
-                    newProfile.fingerprint = normalizeFingerprintForStorage(
-                        newProfile.fingerprint || createManagedFingerprint({}),
-                        { fitMissingWindowToWorkArea: true }
-                    );
-                    profiles.push(newProfile);
-                    imported++;
+                const zipBuffer = decryptData(encrypted, password);
+                const bundle = await loadFullBackupBundle(zipBuffer);
+                try {
+                    const idMap = new Map();
+                    const remappedProfiles = bundle.metadata.profiles.map(profile => {
+                        const nextId = uuidv4();
+                        idMap.set(profile.id, nextId);
+                        return { ...profile, id: nextId, name: generateUniqueName(profile.name || `Imported-${Date.now()}`) };
+                    });
+                    await remapPayloadProfileIds(bundle.payloadRoot, idMap);
+                    const remappedMetadata = {
+                        ...bundle.metadata,
+                        profiles: remappedProfiles,
+                        cookies: remapImportedCookies(bundle.metadata.cookies || {}, idMap),
+                    };
+                    const imported = await applyImportedBundle(bundle.payloadRoot, remappedMetadata);
+                    notifyUIRefresh();
+                    return { success: true, message: `Imported ${imported} profiles from backup`, count: imported };
+                } finally {
+                    try { await fs.remove(bundle.stageRoot); } catch (e) { }
                 }
-                await fs.writeJson(PROFILES_FILE, profiles);
-                notifyUIRefresh(); // Notify UI to refresh
-                return { success: true, message: `Imported ${imported} profiles from backup`, count: imported };
             } catch (decryptErr) {
-                return { status: 400, data: { success: false, error: 'Invalid password or corrupted backup' } };
+                const msg = decryptErr && decryptErr.message ? decryptErr.message : String(decryptErr);
+                const friendly = (msg.includes('Unsupported state') || msg.includes('bad decrypt'))
+                    ? 'Invalid password or corrupted backup'
+                    : msg;
+                return { status: 400, data: { success: false, error: friendly } };
             }
         } catch (err) {
             return { status: 400, data: { success: false, error: err.message } };
@@ -2124,6 +2096,388 @@ function decryptData(encryptedBuffer, password) {
     return Buffer.concat([decipher.update(encrypted), decipher.final()]);
 }
 
+const FULL_BACKUP_DATA_VERSION = 2;
+const FULL_BACKUP_METADATA_FILE = 'metadata.json';
+const FULL_BACKUP_SKIP_DIRS = new Set([
+    'Cache',
+    'Code Cache',
+    'GPUCache',
+    'DawnCache',
+    'GrShaderCache',
+    'ShaderCache',
+    'Crashpad',
+]);
+const FULL_BACKUP_SKIP_FILES = new Set([
+    'SingletonLock',
+    'SingletonSocket',
+    'SingletonCookie',
+    'LOCK',
+]);
+
+function isSupportedFullBackupVersion(version) {
+    return version === FULL_BACKUP_DATA_VERSION;
+}
+
+function getRunningProfileNames(profileIds, profiles) {
+    const idSet = new Set(Array.isArray(profileIds) ? profileIds : []);
+    return (Array.isArray(profiles) ? profiles : [])
+        .filter(p => idSet.has(p.id) && activeProcesses[p.id])
+        .map(p => String(p.name || p.id || '').trim() || p.id);
+}
+
+function ensureProfilesStopped(profileIds, profiles, actionText) {
+    const runningNames = getRunningProfileNames(profileIds, profiles);
+    if (runningNames.length > 0) {
+        throw new Error(`${actionText}前请先关闭环境：${runningNames.join(', ')}`);
+    }
+}
+
+function normalizeBackupRelativePath(relativePath) {
+    const normalized = path.posix.normalize(String(relativePath || '').replace(/\\/g, '/')).replace(/^\/+/, '');
+    if (!normalized || normalized === '.' || normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) {
+        throw new Error(`Invalid backup path: ${relativePath}`);
+    }
+    return normalized;
+}
+
+function getProfileUserDataDir(profileId) {
+    return path.join(DATA_PATH, profileId, 'browser_data');
+}
+
+function getBackupTempRoot(prefix) {
+    return fs.mkdtemp(path.join(app.getPath('temp'), prefix));
+}
+
+function getImportStageRoot(prefix) {
+    fs.ensureDirSync(DATA_PATH);
+    return fs.mkdtemp(path.join(DATA_PATH, prefix));
+}
+
+function shouldSkipBackupCopyPath(rootDir, srcPath) {
+    const relativePath = path.relative(rootDir, srcPath);
+    if (!relativePath || relativePath === '') return false;
+    const normalized = normalizeBackupRelativePath(relativePath);
+    const parts = normalized.split('/').filter(Boolean);
+    const name = parts[parts.length - 1] || '';
+    if (!name) return false;
+    if (FULL_BACKUP_SKIP_DIRS.has(name) || FULL_BACKUP_SKIP_FILES.has(name)) return true;
+    const lower = name.toLowerCase();
+    return lower.endsWith('.tmp') || lower.endsWith('.temp');
+}
+
+async function copyUserDataDirForBackup(srcDir, destDir) {
+    if (!fs.existsSync(srcDir)) return false;
+    await fs.copy(srcDir, destDir, {
+        dereference: false,
+        preserveTimestamps: false,
+        filter: (srcPath) => !shouldSkipBackupCopyPath(srcDir, srcPath),
+    });
+    return true;
+}
+
+async function withCookieBrowser(userDataDir, handler) {
+    const chromePath = getChromiumPath();
+    if (!chromePath) throw new Error('Chrome binary not found.');
+    await fs.ensureDir(userDataDir);
+
+    const browser = await puppeteer.launch({
+        headless: true,
+        executablePath: chromePath,
+        userDataDir,
+        defaultViewport: null,
+        pipe: false,
+        dumpio: false,
+        args: [
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-background-networking',
+            '--disable-default-apps',
+            '--disable-sync',
+        ],
+    });
+
+    try {
+        return await handler(browser);
+    } finally {
+        try { await browser.close(); } catch (e) { }
+    }
+}
+
+function normalizeCookieForImport(cookie) {
+    if (!cookie || !cookie.name) return null;
+    const out = {
+        name: cookie.name,
+        value: cookie.value || '',
+        domain: cookie.domain,
+        path: cookie.path || '/',
+        secure: !!cookie.secure,
+        httpOnly: !!cookie.httpOnly,
+    };
+    if (cookie.sameSite) out.sameSite = cookie.sameSite;
+    if (Number.isFinite(cookie.expires) && cookie.expires > 0) out.expires = cookie.expires;
+    if (cookie.priority) out.priority = cookie.priority;
+    if (typeof cookie.sameParty === 'boolean') out.sameParty = cookie.sameParty;
+    if (cookie.sourceScheme) out.sourceScheme = cookie.sourceScheme;
+    if (Number.isInteger(cookie.sourcePort)) out.sourcePort = cookie.sourcePort;
+    if (cookie.partitionKey !== undefined) out.partitionKey = cookie.partitionKey;
+    return out;
+}
+
+async function exportCookiesFromUserDataDir(userDataDir) {
+    return withCookieBrowser(userDataDir, async (browser) => {
+        const page = await browser.newPage();
+        try {
+            const client = await page.target().createCDPSession();
+            const result = await client.send('Storage.getCookies');
+            return Array.isArray(result && result.cookies) ? result.cookies : [];
+        } finally {
+            try { await page.close(); } catch (e) { }
+        }
+    });
+}
+
+async function clearCookieStoresInUserDataDir(userDataDir) {
+    const cookiePaths = [
+        path.join(userDataDir, 'Default', 'Cookies'),
+        path.join(userDataDir, 'Default', 'Cookies-journal'),
+        path.join(userDataDir, 'Default', 'Network', 'Cookies'),
+        path.join(userDataDir, 'Default', 'Network', 'Cookies-journal'),
+    ];
+    for (const p of cookiePaths) {
+        try { await fs.remove(p); } catch (e) { }
+    }
+}
+
+async function importCookiesToUserDataDir(userDataDir, cookies) {
+    if (!Array.isArray(cookies) || cookies.length === 0) return;
+    await clearCookieStoresInUserDataDir(userDataDir);
+    await withCookieBrowser(userDataDir, async (browser) => {
+        const page = await browser.newPage();
+        try {
+            const client = await page.target().createCDPSession();
+            const normalized = cookies
+                .map(normalizeCookieForImport)
+                .filter(Boolean);
+            if (normalized.length > 0) {
+                await client.send('Storage.setCookies', { cookies: normalized });
+            }
+        } finally {
+            try { await page.close(); } catch (e) { }
+        }
+    });
+}
+
+function createFullBackupMetadata(selectedProfiles, settings) {
+    return {
+        version: FULL_BACKUP_DATA_VERSION,
+        createdAt: Date.now(),
+        profiles: selectedProfiles.map(p => ({
+            ...p,
+            fingerprint: cleanFingerprint(p.fingerprint)
+        })),
+        preProxies: settings.preProxies || [],
+        subscriptions: settings.subscriptions || [],
+        cookies: {}
+    };
+}
+
+async function buildFullBackupBundle(selectedProfiles, settings) {
+    const tempRoot = await getBackupTempRoot('geekez-backup-');
+    const payloadRoot = path.join(tempRoot, 'payload');
+    const browserDataRoot = path.join(payloadRoot, 'browser_data');
+    const metadata = createFullBackupMetadata(selectedProfiles, settings);
+
+    try {
+        await fs.ensureDir(browserDataRoot);
+        for (const profile of selectedProfiles) {
+            const srcUserDataDir = getProfileUserDataDir(profile.id);
+            const snapshotUserDataDir = path.join(browserDataRoot, profile.id);
+            const copied = await copyUserDataDirForBackup(srcUserDataDir, snapshotUserDataDir);
+            if (!copied) continue;
+            const cookies = await exportCookiesFromUserDataDir(snapshotUserDataDir);
+            if (Array.isArray(cookies) && cookies.length > 0) metadata.cookies[profile.id] = cookies;
+            await clearCookieStoresInUserDataDir(snapshotUserDataDir);
+        }
+
+        await fs.writeJson(path.join(payloadRoot, FULL_BACKUP_METADATA_FILE), metadata);
+        const zipPath = path.join(tempRoot, 'backup.zip');
+        const zip = new AdmZip();
+        zip.addLocalFolder(payloadRoot, '');
+        zip.writeZip(zipPath);
+        return { tempRoot, zipPath, metadata };
+    } catch (err) {
+        try { await fs.remove(tempRoot); } catch (e) { }
+        throw err;
+    }
+}
+
+async function loadFullBackupBundle(buffer, options = {}) {
+    const stageRoot = options.stageRoot || await getImportStageRoot('.geekez-import-');
+    const payloadRoot = path.join(stageRoot, 'payload');
+    try {
+        await fs.ensureDir(payloadRoot);
+        const zip = new AdmZip(buffer);
+        zip.extractAllTo(payloadRoot, true);
+        const metadataPath = path.join(payloadRoot, FULL_BACKUP_METADATA_FILE);
+        if (!fs.existsSync(metadataPath)) throw new Error('Invalid backup: metadata missing');
+        const metadata = await fs.readJson(metadataPath);
+        const version = Number.parseInt(metadata && metadata.version, 10);
+        if (!isSupportedFullBackupVersion(version)) throw new Error(`Unsupported backup version: ${version}`);
+        if (!Array.isArray(metadata.profiles)) throw new Error('Invalid backup: profiles missing');
+        return { stageRoot, payloadRoot, metadata };
+    } catch (err) {
+        try { await fs.remove(stageRoot); } catch (e) { }
+        throw err;
+    }
+}
+
+async function replaceProfileUserDataDirs(payloadRoot, profiles) {
+    const operations = [];
+    const browserDataRoot = path.join(payloadRoot, 'browser_data');
+    const rollbackRoot = path.join(payloadRoot, '_rollback');
+
+    for (const profile of profiles) {
+        const incomingDir = path.join(browserDataRoot, profile.id);
+        const destProfileDir = path.join(DATA_PATH, profile.id);
+        const destUserDataDir = getProfileUserDataDir(profile.id);
+        const backupDir = path.join(rollbackRoot, profile.id, 'browser_data');
+        const hasIncoming = fs.existsSync(incomingDir);
+        const hadExisting = fs.existsSync(destUserDataDir);
+        if (!hasIncoming && !hadExisting) continue;
+        await fs.ensureDir(destProfileDir);
+        const op = { profileId: profile.id, destUserDataDir, backupDir, hadExisting, hasIncoming };
+        operations.push(op);
+        if (hadExisting) {
+            await fs.ensureDir(path.dirname(backupDir));
+            await fs.move(destUserDataDir, backupDir, { overwrite: true });
+        }
+        if (hasIncoming) {
+            await fs.move(incomingDir, destUserDataDir, { overwrite: true });
+        }
+    }
+
+    return operations;
+}
+
+async function rollbackUserDataReplacements(operations) {
+    for (const op of [...operations].reverse()) {
+        try {
+            if (fs.existsSync(op.destUserDataDir)) await fs.remove(op.destUserDataDir);
+        } catch (e) { }
+        if (op.hadExisting) {
+            try {
+                if (fs.existsSync(op.backupDir)) {
+                    await fs.ensureDir(path.dirname(op.destUserDataDir));
+                    await fs.move(op.backupDir, op.destUserDataDir, { overwrite: true });
+                }
+            } catch (e) { }
+        }
+    }
+}
+
+async function finalizeUserDataReplacements(operations) {
+    for (const op of operations) {
+        try {
+            const rollbackProfileDir = path.dirname(op.backupDir);
+            if (fs.existsSync(rollbackProfileDir)) await fs.remove(rollbackProfileDir);
+        } catch (e) { }
+    }
+}
+
+async function importCookiesForProfiles(profiles, cookiesMap) {
+    for (const profile of profiles) {
+        const cookies = cookiesMap && cookiesMap[profile.id];
+        if (!Array.isArray(cookies) || cookies.length === 0) continue;
+        await importCookiesToUserDataDir(getProfileUserDataDir(profile.id), cookies);
+    }
+}
+
+function buildImportedProfiles(currentProfiles, importedProfiles) {
+    const nextProfiles = Array.isArray(currentProfiles) ? [...currentProfiles] : [];
+    for (const profile of importedProfiles) {
+        const idx = nextProfiles.findIndex(cp => cp.id === profile.id);
+        const normalizedProfile = {
+            ...profile,
+            fingerprint: normalizeFingerprintForStorage(
+                profile.fingerprint || createManagedFingerprint({}),
+                { fitMissingWindowToWorkArea: true }
+            )
+        };
+        if (idx > -1) nextProfiles[idx] = normalizedProfile;
+        else nextProfiles.push(normalizedProfile);
+    }
+    return nextProfiles;
+}
+
+function buildImportedSettings(currentSettings, metadata) {
+    const nextSettings = isPlainObject(currentSettings) ? { ...currentSettings } : {};
+    if (!Array.isArray(nextSettings.preProxies)) nextSettings.preProxies = [];
+    if (!Array.isArray(nextSettings.subscriptions)) nextSettings.subscriptions = [];
+    for (const p of metadata.preProxies || []) {
+        if (!nextSettings.preProxies.find(cp => cp.id === p.id)) nextSettings.preProxies.push(p);
+    }
+    for (const s of metadata.subscriptions || []) {
+        if (!nextSettings.subscriptions.find(cs => cs.id === s.id)) nextSettings.subscriptions.push(s);
+    }
+    return nextSettings;
+}
+
+function remapImportedCookies(cookiesMap, idMap) {
+    const out = {};
+    for (const [oldId, cookies] of Object.entries(cookiesMap || {})) {
+        const newId = idMap.get(oldId);
+        if (!newId) continue;
+        out[newId] = cookies;
+    }
+    return out;
+}
+
+async function remapPayloadProfileIds(payloadRoot, idMap) {
+    const browserDataRoot = path.join(payloadRoot, 'browser_data');
+    if (!fs.existsSync(browserDataRoot)) return;
+    for (const [oldId, newId] of idMap.entries()) {
+        if (!oldId || !newId || oldId === newId) continue;
+        const oldDir = path.join(browserDataRoot, oldId);
+        const newDir = path.join(browserDataRoot, newId);
+        if (!fs.existsSync(oldDir)) continue;
+        await fs.ensureDir(path.dirname(newDir));
+        await fs.move(oldDir, newDir, { overwrite: true });
+    }
+}
+
+async function restoreFileContents(targetPath, previousContent) {
+    if (previousContent === null) {
+        await fs.remove(targetPath);
+        return;
+    }
+    await fs.ensureDir(path.dirname(targetPath));
+    await fs.writeFile(targetPath, previousContent);
+}
+
+async function applyImportedBundle(payloadRoot, metadata) {
+    const currentProfilesRaw = fs.existsSync(PROFILES_FILE) ? await fs.readFile(PROFILES_FILE) : null;
+    const currentSettingsRaw = fs.existsSync(SETTINGS_FILE) ? await fs.readFile(SETTINGS_FILE) : null;
+    const currentProfiles = currentProfilesRaw ? JSON.parse(currentProfilesRaw.toString('utf8')) : [];
+    const currentSettings = currentSettingsRaw ? JSON.parse(currentSettingsRaw.toString('utf8')) : { preProxies: [], subscriptions: [] };
+    const nextProfiles = buildImportedProfiles(currentProfiles, metadata.profiles);
+    const nextSettings = buildImportedSettings(currentSettings, metadata);
+    const operations = [];
+
+    try {
+        operations.push(...await replaceProfileUserDataDirs(payloadRoot, metadata.profiles));
+        await importCookiesForProfiles(metadata.profiles, metadata.cookies || {});
+        await fs.writeJson(PROFILES_FILE, nextProfiles);
+        await fs.writeJson(SETTINGS_FILE, nextSettings);
+        await finalizeUserDataReplacements(operations);
+        return metadata.profiles.length;
+    } catch (err) {
+        await rollbackUserDataReplacements(operations);
+        try { await restoreFileContents(PROFILES_FILE, currentProfilesRaw); } catch (e) { }
+        try { await restoreFileContents(SETTINGS_FILE, currentSettingsRaw); } catch (e) { }
+        throw err;
+    }
+}
+
 // 获取用于选择器的环境列表
 ipcMain.handle('get-export-profiles', async () => {
     const profiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
@@ -2174,92 +2528,27 @@ ipcMain.handle('export-full-backup', async (e, { profileIds, password }) => {
     try {
         const allProfiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
         const settings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
+        const selectedProfiles = allProfiles.filter(p => profileIds.includes(p.id));
+        ensureProfilesStopped(selectedProfiles.map(p => p.id), allProfiles, '完整备份');
+        const bundle = await buildFullBackupBundle(selectedProfiles, settings);
+        try {
+            const zipBuffer = await fs.readFile(bundle.zipPath);
+            const encrypted = encryptData(zipBuffer, password);
 
-        // 过滤选中的环境
-        const selectedProfiles = allProfiles
-            .filter(p => profileIds.includes(p.id))
-            .map(p => ({
-                ...p,
-                fingerprint: cleanFingerprint(p.fingerprint)
-            }));
+            const { filePath } = await dialog.showSaveDialog({
+                title: 'Export Full Backup',
+                defaultPath: `GeekEZ_FullBackup_${Date.now()}.geekez`,
+                filters: [{ name: 'GeekEZ Backup', extensions: ['geekez'] }]
+            });
 
-        // 准备备份数据
-        const backupData = {
-            version: 1,
-            createdAt: Date.now(),
-            profiles: selectedProfiles,
-            preProxies: settings.preProxies || [],
-            subscriptions: settings.subscriptions || [],
-            browserData: {}
-        };
-
-        // 收集浏览器数据
-        // 浏览器数据存储在 DATA_PATH/<profileId>/browser_data/Default/
-        for (const profile of selectedProfiles) {
-            const profileDataDir = path.join(DATA_PATH, profile.id, 'browser_data');
-            if (fs.existsSync(profileDataDir)) {
-                const defaultDir = path.join(profileDataDir, 'Default');
-                if (fs.existsSync(defaultDir)) {
-                    const browserFiles = {};
-
-                    // 收集关键浏览器数据文件
-                    const filesToBackup = ['Bookmarks', 'Cookies', 'Login Data', 'Web Data', 'Preferences'];
-                    for (const fileName of filesToBackup) {
-                        const filePath = path.join(defaultDir, fileName);
-                        if (fs.existsSync(filePath)) {
-                            try {
-                                const content = await fs.readFile(filePath);
-                                browserFiles[fileName] = content.toString('base64');
-                            } catch (err) {
-                                console.error(`Failed to read ${fileName} for ${profile.id}:`, err.message);
-                            }
-                        }
-                    }
-
-                    // 收集 Local Storage
-                    const localStorageDir = path.join(defaultDir, 'Local Storage', 'leveldb');
-                    if (fs.existsSync(localStorageDir)) {
-                        try {
-                            const lsFiles = await fs.readdir(localStorageDir);
-                            const localStorageData = {};
-                            for (const lsFile of lsFiles) {
-                                if (lsFile.endsWith('.ldb') || lsFile.endsWith('.log')) {
-                                    const lsFilePath = path.join(localStorageDir, lsFile);
-                                    const content = await fs.readFile(lsFilePath);
-                                    localStorageData[lsFile] = content.toString('base64');
-                                }
-                            }
-                            if (Object.keys(localStorageData).length > 0) {
-                                browserFiles['LocalStorage'] = localStorageData;
-                            }
-                        } catch (err) {
-                            console.error(`Failed to read LocalStorage for ${profile.id}:`, err.message);
-                        }
-                    }
-
-                    if (Object.keys(browserFiles).length > 0) {
-                        backupData.browserData[profile.id] = browserFiles;
-                    }
-                }
+            if (filePath) {
+                await fs.writeFile(filePath, encrypted);
+                return { success: true, count: selectedProfiles.length };
             }
+            return { success: false, cancelled: true };
+        } finally {
+            try { await fs.remove(bundle.tempRoot); } catch (e) { }
         }
-
-        // 压缩并加密
-        const jsonData = JSON.stringify(backupData);
-        const compressed = await gzip(Buffer.from(jsonData, 'utf8'));
-        const encrypted = encryptData(compressed, password);
-
-        const { filePath } = await dialog.showSaveDialog({
-            title: 'Export Full Backup',
-            defaultPath: `GeekEZ_FullBackup_${Date.now()}.geekez`,
-            filters: [{ name: 'GeekEZ Backup', extensions: ['geekez'] }]
-        });
-
-        if (filePath) {
-            await fs.writeFile(filePath, encrypted);
-            return { success: true, count: selectedProfiles.length };
-        }
-        return { success: false, cancelled: true };
     } catch (err) {
         console.error('Full backup failed:', err);
         return { success: false, error: err.message };
@@ -2279,74 +2568,15 @@ ipcMain.handle('import-full-backup', async (e, { password }) => {
         }
 
         const encrypted = await fs.readFile(filePaths[0]);
-        const decrypted = decryptData(encrypted, password);
-        const decompressed = await gunzip(decrypted);
-        const backupData = JSON.parse(decompressed.toString('utf8'));
-
-        if (backupData.version !== 1) {
-            throw new Error(`Unsupported backup version: ${backupData.version}`);
+        const zipBuffer = decryptData(encrypted, password);
+        const bundle = await loadFullBackupBundle(zipBuffer);
+        try {
+            ensureProfilesStopped(bundle.metadata.profiles.map(p => p.id), bundle.metadata.profiles, '导入完整备份');
+            const importedCount = await applyImportedBundle(bundle.payloadRoot, bundle.metadata);
+            return { success: true, count: importedCount };
+        } finally {
+            try { await fs.remove(bundle.stageRoot); } catch (e) { }
         }
-
-        // 还原 profiles
-        const currentProfiles = fs.existsSync(PROFILES_FILE) ? await fs.readJson(PROFILES_FILE) : [];
-        let importedCount = 0;
-
-        for (const profile of backupData.profiles) {
-            const idx = currentProfiles.findIndex(cp => cp.id === profile.id);
-            if (idx > -1) {
-                currentProfiles[idx] = profile;
-            } else {
-                currentProfiles.push(profile);
-            }
-            importedCount++;
-        }
-        await fs.writeJson(PROFILES_FILE, currentProfiles);
-
-        // 还原代理和订阅
-        const currentSettings = fs.existsSync(SETTINGS_FILE) ? await fs.readJson(SETTINGS_FILE) : { preProxies: [], subscriptions: [] };
-        if (backupData.preProxies) {
-            if (!currentSettings.preProxies) currentSettings.preProxies = [];
-            for (const p of backupData.preProxies) {
-                if (!currentSettings.preProxies.find(cp => cp.id === p.id)) {
-                    currentSettings.preProxies.push(p);
-                }
-            }
-        }
-        if (backupData.subscriptions) {
-            if (!currentSettings.subscriptions) currentSettings.subscriptions = [];
-            for (const s of backupData.subscriptions) {
-                if (!currentSettings.subscriptions.find(cs => cs.id === s.id)) {
-                    currentSettings.subscriptions.push(s);
-                }
-            }
-        }
-        await fs.writeJson(SETTINGS_FILE, currentSettings);
-
-        // 还原浏览器数据
-        // 浏览器数据存储在 DATA_PATH/<profileId>/browser_data/Default/
-        for (const [profileId, browserFiles] of Object.entries(backupData.browserData || {})) {
-            const profileDataDir = path.join(DATA_PATH, profileId, 'browser_data');
-            const defaultDir = path.join(profileDataDir, 'Default');
-            await fs.ensureDir(defaultDir);
-
-            for (const [fileName, content] of Object.entries(browserFiles)) {
-                if (fileName === 'LocalStorage') {
-                    // 还原 Local Storage
-                    const localStorageDir = path.join(defaultDir, 'Local Storage', 'leveldb');
-                    await fs.ensureDir(localStorageDir);
-                    for (const [lsFileName, lsContent] of Object.entries(content)) {
-                        const lsFilePath = path.join(localStorageDir, lsFileName);
-                        await fs.writeFile(lsFilePath, Buffer.from(lsContent, 'base64'));
-                    }
-                } else {
-                    // 还原普通文件
-                    const filePath = path.join(defaultDir, fileName);
-                    await fs.writeFile(filePath, Buffer.from(content, 'base64'));
-                }
-            }
-        }
-
-        return { success: true, count: importedCount };
     } catch (err) {
         console.error('Import full backup failed:', err);
         if (err.message.includes('Unsupported state') || err.message.includes('bad decrypt')) {

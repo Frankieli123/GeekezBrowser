@@ -64,7 +64,7 @@ window.zhCN = {
     expAllProfiles: "完整备份（指纹环境）",
     expAllProfilesDesc: "导出指纹配置 + 前置代理（不含浏览器数据）",
     expFullBackup: "🔐 完整备份（全部）",
-    expFullBackupDesc: "含浏览器数据（Cookie/密码/书签），AES-256加密",
+    expFullBackupDesc: "含完整浏览器数据（登录态/站点存储/书签等），AES-256加密",
     expProxies: "前置代理",
     expProxiesDesc: "导出手动节点和订阅配置",
     expProfiles: "指纹环境",

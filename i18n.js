@@ -50,7 +50,7 @@ const enTranslations = {
     expAllProfiles: "Full Backup (Profiles)",
     expAllProfilesDesc: "Export profiles + proxies (no browser data)",
     expFullBackup: "🔐 Full Backup (All)",
-    expFullBackupDesc: "Include browser data (Cookies/Passwords/Bookmarks), AES-256 encrypted",
+    expFullBackupDesc: "Include full browser data (sessions/storage/bookmarks), AES-256 encrypted",
     expProxies: "Proxies Only",
     expProxiesDesc: "Chain Proxies & Subscriptions Settings",
     expProfiles: "Profiles Only",
