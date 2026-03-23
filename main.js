@@ -824,6 +824,15 @@ function findPlinkPath() {
     if (override && fs.existsSync(override)) return override;
 
     if (process.platform !== 'win32') return null;
+
+    const bundledCandidates = [
+        path.join(BIN_DIR, 'plink.exe'),
+        path.join(BIN_DIR_LEGACY, 'plink.exe'),
+    ];
+    for (const p of bundledCandidates) {
+        try { if (fs.existsSync(p)) return p; } catch (e) { }
+    }
+
     const envPath = String(process.env.PATH || '');
     const parts = envPath.split(';').map(s => s.trim()).filter(Boolean);
     for (const dir of parts) {
@@ -901,7 +910,7 @@ async function startSshDynamicProxy(proxyStr, profileDir, options = {}) {
         const plinkPath = findPlinkPath();
         if (!plinkPath) {
             try { fs.closeSync(logFd); } catch (e) { }
-            throw new Error('plink.exe not found; install PuTTY or set GEEKEZ_PLINK_PATH');
+            throw new Error('plink.exe not found; install PuTTY, use a build with bundled plink, or set GEEKEZ_PLINK_PATH');
         }
 
         const pwFile = path.join(profileDir, `ssh_pw_${Date.now()}_${Math.random().toString(16).slice(2)}.txt`);

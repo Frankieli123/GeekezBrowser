@@ -87,6 +87,20 @@ jobs:
           rm -f "$BIN_DIR"/{LICENSE,README.md}
           [ "${{ matrix.os }}" != "win32" ] && chmod +x "$BIN_DIR/xray" || true
 
+      - name: Download Plink
+        if: matrix.os == 'win32'
+        shell: bash
+        run: |
+          BIN_DIR="resources/bin/${{ matrix.os }}-${{ matrix.arch }}"
+          if [ "${{ matrix.arch }}" = "x64" ]; then
+            PLINK_URL="https://the.earth.li/~sgtatham/putty/latest/w64/plink.exe"
+          elif [ "${{ matrix.arch }}" = "arm64" ]; then
+            PLINK_URL="https://the.earth.li/~sgtatham/putty/latest/wa64/plink.exe"
+          else
+            PLINK_URL="https://the.earth.li/~sgtatham/putty/latest/w32/plink.exe"
+          fi
+          curl -sL -o "$BIN_DIR/plink.exe" "$PLINK_URL"
+
       - name: Download Chrome
         run: npx @puppeteer/browsers install chrome@143.0.7499.169 --path resources/puppeteer
 

@@ -52,10 +52,14 @@ function getPlatformInfo() {
     const arch = os.arch();
     let xrayAsset = '';
     let exeName = 'xray';
+    let plinkUrl = '';
 
     if (platform === 'win32') {
         xrayAsset = `Xray-windows-${arch === 'x64' ? '64' : '32'}.zip`;
         exeName = 'xray.exe';
+        if (arch === 'x64') plinkUrl = 'https://the.earth.li/~sgtatham/putty/latest/w64/plink.exe';
+        else if (arch === 'arm64') plinkUrl = 'https://the.earth.li/~sgtatham/putty/latest/wa64/plink.exe';
+        else plinkUrl = 'https://the.earth.li/~sgtatham/putty/latest/w32/plink.exe';
     } else if (platform === 'darwin') {
         xrayAsset = `Xray-macos-${arch === 'arm64' ? 'arm64-v8a' : '64'}.zip`;
     } else if (platform === 'linux') {
@@ -64,7 +68,7 @@ function getPlatformInfo() {
         console.error('❌ Unsupported Platform:', platform);
         process.exit(1);
     }
-    return { xrayAsset, exeName };
+    return { xrayAsset, exeName, plinkUrl };
 }
 
 function checkNetwork() {
@@ -192,7 +196,7 @@ async function main() {
         // 1. 准备 Xray
         if (!fs.existsSync(BIN_DIR)) fs.mkdirSync(BIN_DIR, { recursive: true });
 
-        const { xrayAsset, exeName } = getPlatformInfo();
+        const { xrayAsset, exeName, plinkUrl } = getPlatformInfo();
         const zipPath = path.join(BIN_DIR, 'xray.zip');
         const isGlobal = await checkNetwork();
 
@@ -237,6 +241,13 @@ async function main() {
 
         if (os.platform() !== 'win32') fs.chmodSync(path.join(BIN_DIR, exeName), '755');
         console.log(`✅ Xray Updated Successfully! (Platform: ${PLATFORM_ARCH})`);
+
+        if (os.platform() === 'win32' && plinkUrl) {
+            const plinkPath = path.join(BIN_DIR, 'plink.exe');
+            process.stdout.write('⬇️  Downloading Plink...\n');
+            await downloadFile(plinkUrl, plinkPath, 'Plink    ');
+            console.log('✅ Plink downloaded successfully!');
+        }
 
         // 2. 准备 Chrome
         process.stdout.write('⬇️  Downloading Chrome...\n');
