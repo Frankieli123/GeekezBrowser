@@ -384,20 +384,31 @@ function parseProxyLink(link, tag) {
 function generateXrayConfig(mainProxyStr, localPort, preProxyConfig = null) {
     const outbounds = [];
     let mainOutbound;
-    try { mainOutbound = parseProxyLink(mainProxyStr, "proxy_main"); }
-    catch (e) { mainOutbound = buildDirectOutbound("proxy_main"); }
+    try {
+        mainOutbound = parseProxyLink(mainProxyStr, "proxy_main");
+    } catch (e) {
+        throw new Error(`Invalid main proxy: ${e && e.message ? e.message : String(e)}`);
+    }
 
     if (preProxyConfig && preProxyConfig.preProxies && preProxyConfig.preProxies.length > 0) {
         try {
             const target = preProxyConfig.preProxies[0];
+            const targetUrl = String(target && target.url || '').trim();
+            if (!targetUrl) throw new Error('Selected pre-proxy is empty');
             if (mainOutbound.protocol === "freedom") {
-                mainOutbound = parseProxyLink(target.url, "proxy_main");
+                mainOutbound = parseProxyLink(targetUrl, "proxy_main");
             } else {
-                const preOutbound = parseProxyLink(target.url, "proxy_pre");
+                const preOutbound = parseProxyLink(targetUrl, "proxy_pre");
                 outbounds.push(preOutbound);
                 mainOutbound.proxySettings = { tag: "proxy_pre" };
             }
-        } catch (e) { }
+        } catch (e) {
+            const label = String(
+                (preProxyConfig.preProxies[0] && (preProxyConfig.preProxies[0].remark || preProxyConfig.preProxies[0].id || preProxyConfig.preProxies[0].url))
+                || 'pre-proxy'
+            ).trim();
+            throw new Error(`Invalid pre-proxy "${label}": ${e && e.message ? e.message : String(e)}`);
+        }
     }
 
     outbounds.push(mainOutbound);

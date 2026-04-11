@@ -113,13 +113,14 @@ function generateFingerprint(options = {}) {
         platform: osData.platform,
         screen: { width: res.w, height: res.h },
         window: { width: res.w, height: res.h },
+        language: 'auto',
         languages: languages,
         hardwareConcurrency: [4, 8, 12, 16][Math.floor(Math.random() * 4)],
         deviceMemory: [2, 4, 8][Math.floor(Math.random() * 3)],
         canvasNoise: canvasNoise,
         audioNoise: Math.random() * 0.000001,
         noiseSeed: Math.floor(Math.random() * 9999999),
-        timezone: "America/Los_Angeles", // 默认值
+        timezone: 'Auto',
         // P0: WebGL 渲染器信息
         webgl: webgl,
         // P0: 字体列表
@@ -130,17 +131,33 @@ function generateFingerprint(options = {}) {
     };
 }
 
+// 水印样式常量
+const WATERMARK_STYLES = {
+    banner: 'position: fixed; top: 12px; right: 12px; max-width: min(320px, calc(100vw - 24px)); background: linear-gradient(135deg, rgba(37, 99, 235, 0.92), rgba(79, 70, 229, 0.9)); color: #fff; padding: 8px 36px 8px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; z-index: 2147483647; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.18); display: flex; align-items: center; gap: 8px; font-family: "Segoe UI", monospace; border: 1px solid rgba(255,255,255,0.18); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; backdrop-filter: blur(10px);',
+    floating: 'position: fixed; bottom: 16px; right: 16px; background: rgba(15, 23, 42, 0.85); color: rgba(255, 255, 255, 0.9); padding: 6px 10px; border-radius: 8px; font-size: 11px; font-weight: 500; z-index: 2147483647; pointer-events: none; font-family: "Segoe UI", monospace; backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1);'
+};
+
 // 注入脚本：包含复杂的时区伪装逻辑
 function getInjectScript(fp, profileName, watermarkStyle) {
     const fpJson = JSON.stringify(fp);
-    const safeProfileName = (profileName || 'Profile').replace(/[<>"'&]/g, ''); // 防止 XSS
-    const style = watermarkStyle || 'enhanced'; // 默认使用增强水印
+    const safeProfileName = (profileName || 'Profile')
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r')
+        .replace(/\u2028/g, '\\u2028')
+        .replace(/\u2029/g, '\\u2029');
+    const style = watermarkStyle || 'enhanced';
     return `
     (function() {
         try {
             const __geekezLocalPage = (() => {
                 try {
-                    return /^(https?:\\/\\/)?(localhost|127\\.0\\.0\\.1|\\[::1\\])(:\\d+)?(\\/|$)/i.test(String(location && location.href || ''));
+                    const href = String(location && location.href || '');
+                    const isLocal = /^(https?:\\/\\/)?(localhost|127\\.0\\.0\\.1|\\[::1\\])(:\\d+)?(\\/|$)/i.test(href);
+                    const isDashboard = /^(https?:\\/\\/)?(localhost|127\\.0\\.0\\.1|\\[::1\\])(:\\d+)?\\/dashboard(?:[/?#]|$)/i.test(href);
+                    return isLocal && !isDashboard;
                 } catch (e) {
                     return false;
                 }
@@ -148,7 +165,23 @@ function getInjectScript(fp, profileName, watermarkStyle) {
             if (__geekezLocalPage) return;
 
             const fp = ${fpJson};
-            const targetTimezone = fp.timezone || "America/Los_Angeles";
+            const targetTimezone = fp.timezone || "";
+            const targetLang = fp.language && fp.language !== 'auto' ? String(fp.language) : '';
+            const targetLanguages = Array.isArray(fp.languages) && fp.languages.length
+                ? fp.languages.filter(Boolean).map(item => String(item))
+                : (targetLang ? [targetLang, targetLang.split('-')[0]].filter((item, index, arr) => item && arr.indexOf(item) === index) : []);
+            const normalizePermissionState = (value, fallback) => {
+                const current = String(value || '').trim().toLowerCase();
+                return ['granted', 'prompt', 'denied'].includes(current) ? current : fallback;
+            };
+            const permissionStates = {
+                geolocation: normalizePermissionState(fp.geoPermissionState, fp.geolocation ? 'granted' : 'prompt'),
+                camera: normalizePermissionState(fp.cameraPermissionState, 'prompt'),
+                microphone: normalizePermissionState(fp.microphonePermissionState, 'prompt'),
+                notifications: normalizePermissionState(fp.notificationPermissionState, 'prompt')
+            };
+            const geoPermissionState = permissionStates.geolocation;
+            const notificationPermission = permissionStates.notifications === 'prompt' ? 'default' : permissionStates.notifications;
             const isTopFrame = (() => {
                 try {
                     return window.top === window;
@@ -184,6 +217,16 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                 }
                 return func;
             };
+
+            const createSeededRandom = (seed) => {
+                let value = Math.abs(Number(seed) || 1) % 2147483647;
+                if (value <= 0) value += 2147483646;
+                return () => {
+                    value = value * 16807 % 2147483647;
+                    return (value - 1) / 2147483646;
+                };
+            };
+            const seededRandom = createSeededRandom(fp.noiseSeed || 1);
 
             // --- 0. Windows Timezone Fallback ---
             // CDP timezone override is the primary path.
@@ -265,12 +308,17 @@ function getInjectScript(fp, profileName, watermarkStyle) {
             ['$cdc_asdjflasutopfhvcZLmcfl_', '$chrome_asyncScriptInfo', 'callPhantom', 'webdriver'].forEach(k => {
                  if (window[k]) delete window[k];
             });
-            Object.defineProperty(window, 'chrome', {
-                writable: true,
-                enumerable: true,
-                configurable: false,
-                value: { app: { isInstalled: false, InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' }, RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' } }, runtime: { OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update' }, OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' }, PlatformArch: { ARM: 'arm', ARM64: 'arm64', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' }, PlatformNaclArch: { ARM: 'arm', MIPS: 'mips', X86_32: 'x86-32', X86_64: 'x86-64' }, PlatformOs: { ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win' }, RequestUpdateCheckStatus: { NO_UPDATE: 'no_update', THROTTLED: 'throttled', UPDATE_AVAILABLE: 'update_available' } } }
-            });
+            // Only stub window.chrome when missing; overwriting an existing object is detectable.
+            try {
+                if (!window.chrome) {
+                    Object.defineProperty(window, 'chrome', {
+                        writable: true,
+                        enumerable: true,
+                        configurable: false,
+                        value: { app: { isInstalled: false, InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' }, RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' } }, runtime: { OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update' }, OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' }, PlatformArch: { ARM: 'arm', ARM64: 'arm64', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' }, PlatformNaclArch: { ARM: 'arm', MIPS: 'mips', X86_32: 'x86-32', X86_64: 'x86-64' }, PlatformOs: { ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win' }, RequestUpdateCheckStatus: { NO_UPDATE: 'no_update', THROTTLED: 'throttled', UPDATE_AVAILABLE: 'update_available' } } }
+                    });
+                }
+            } catch (e) { }
 
             // --- 1.5 Screen Resolution Hook ---
             // Override screen properties to match fingerprint values
@@ -341,35 +389,25 @@ function getInjectScript(fp, profileName, watermarkStyle) {
             // --- 2. Stealth Geolocation Hook (Native Mock Pattern) ---
             // 避免使用 Proxy (会被 Pixelscan 识别为 Masking detected)
             // 直接修改 Geolocation.prototype 并确保存根函数通过 native code 检查
-            if (fp.geolocation) {
-                const { latitude, longitude } = fp.geolocation;
-                // 精度提升到 500m - 1500m
-                const accuracy = 500 + Math.floor(Math.random() * 1000);
+            if (typeof Geolocation !== 'undefined' && Geolocation.prototype) {
+                const targetGeolocation = fp.geolocation || null;
+                const latitude = targetGeolocation ? Number(targetGeolocation.latitude) : NaN;
+                const longitude = targetGeolocation ? Number(targetGeolocation.longitude) : NaN;
+                const hasCoords = Number.isFinite(latitude) && Number.isFinite(longitude);
+                const latOffset = hasCoords ? (seededRandom() - 0.5) * 0.0025 : 0;
+                const lonOffset = hasCoords ? (seededRandom() - 0.5) * 0.0025 : 0;
+                const accuracy = Math.max(25, Number(targetGeolocation && targetGeolocation.accuracy) || 100);
+                const geoError = { code: 1, message: geoPermissionState === 'denied' ? 'User denied Geolocation' : 'Geolocation unavailable' };
 
-                const makeNative = (func, name) => {
-                    Object.defineProperty(func, 'toString', {
-                        value: function() { return "function " + name + "() { [native code] }"; },
-                        configurable: true,
-                        writable: true
-                    });
-                    // 隐藏 toString 自身的 toString
-                    Object.defineProperty(func.toString, 'toString', {
-                        value: function() { return "function toString() { [native code] }"; },
-                        configurable: true,
-                        writable: true
-                    });
-                    return func;
-                };
-
-                // 保存原始引用 (虽然我们不打算用它，但为了保险)
-                const originalGetCurrentPosition = Geolocation.prototype.getCurrentPosition;
-
-                // 创建伪造函数
                 const fakeGetCurrentPosition = function getCurrentPosition(success, error, options) {
+                    if (geoPermissionState !== 'granted' || !hasCoords) {
+                        if (typeof error === 'function') setTimeout(() => error(geoError), 10);
+                        return;
+                    }
                     const position = {
                         coords: {
-                            latitude: latitude + (Math.random() - 0.5) * 0.005,
-                            longitude: longitude + (Math.random() - 0.5) * 0.005,
+                            latitude: latitude + latOffset,
+                            longitude: longitude + lonOffset,
                             accuracy: accuracy,
                             altitude: null,
                             altitudeAccuracy: null,
@@ -383,6 +421,10 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                 };
 
                 const fakeWatchPosition = function watchPosition(success, error, options) {
+                    if (geoPermissionState !== 'granted' || !hasCoords) {
+                        if (typeof error === 'function') setTimeout(() => error(geoError), 10);
+                        return 0;
+                    }
                     fakeGetCurrentPosition(success, error, options);
                     return Math.floor(Math.random() * 10000) + 1;
                 };
@@ -401,15 +443,99 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                 });
             }
 
-            // --- 2. Intl API Language Override (Minimal Hook) ---
-            // Only hook Intl API to match --lang parameter, don't touch navigator
-            if (fp.language && fp.language !== 'auto') {
-                const targetLang = fp.language;
-                
+            const getPermissionState = (name) => {
+                const key = String(name || '').trim().toLowerCase();
+                return Object.prototype.hasOwnProperty.call(permissionStates, key) ? permissionStates[key] : '';
+            };
+            const buildPermissionStatus = (state) => ({
+                state: state || 'prompt',
+                onchange: null,
+                addEventListener: function() {},
+                removeEventListener: function() {},
+                dispatchEvent: function() { return false; }
+            });
+            try {
+                const permissionsProto = typeof Permissions !== 'undefined' && Permissions.prototype
+                    && typeof Permissions.prototype.query === 'function'
+                    ? Permissions.prototype
+                    : null;
+                if (permissionsProto) {
+                    const originalPermissionsQuery = permissionsProto.query;
+                    permissionsProto.query = makeNative(function query(permissionDesc) {
+                        const name = permissionDesc && permissionDesc.name ? String(permissionDesc.name).toLowerCase() : '';
+                        const state = getPermissionState(name);
+                        if (state) return Promise.resolve(buildPermissionStatus(state));
+                        return originalPermissionsQuery.call(this, permissionDesc);
+                    }, 'query');
+                }
+                if (navigator.permissions && typeof navigator.permissions.query === 'function') {
+                    const originalPermissionsQuery = navigator.permissions.query.bind(navigator.permissions);
+                    navigator.permissions.query = makeNative(function query(permissionDesc) {
+                        const name = permissionDesc && permissionDesc.name ? String(permissionDesc.name).toLowerCase() : '';
+                        const state = getPermissionState(name);
+                        if (state) return Promise.resolve(buildPermissionStatus(state));
+                        return originalPermissionsQuery(permissionDesc);
+                    }, 'query');
+                }
+            } catch (e) { }
+            try {
+                if (typeof Notification !== 'undefined') {
+                    Object.defineProperty(Notification, 'permission', {
+                        get: makeNative(function permission() { return notificationPermission; }, 'permission'),
+                        configurable: true
+                    });
+                    Notification.requestPermission = makeNative(function requestPermission(callback) {
+                        if (typeof callback === 'function') {
+                            try { callback(notificationPermission); } catch (e) { }
+                        }
+                        return Promise.resolve(notificationPermission);
+                    }, 'requestPermission');
+                }
+            } catch (e) { }
+            try {
+                if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
+                    const originalGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+                    navigator.mediaDevices.getUserMedia = makeNative(function getUserMedia(constraints) {
+                        const wantsAudio = !!(constraints && constraints.audio);
+                        const wantsVideo = !!(constraints && constraints.video);
+                        if ((wantsAudio && permissionStates.microphone === 'denied') || (wantsVideo && permissionStates.camera === 'denied')) {
+                            return Promise.reject(new DOMException('Permission denied', 'NotAllowedError'));
+                        }
+                        return originalGetUserMedia(constraints);
+                    }, 'getUserMedia');
+                }
+            } catch (e) { }
+
+            // --- 2. Locale / Language Consistency Hook ---
+            if (targetLang) {
+                const languageGetter = makeNative(function language() { return targetLang; }, 'language');
+                const languagesGetter = makeNative(function languages() { return targetLanguages.slice(); }, 'languages');
+                try {
+                    Object.defineProperty(Navigator.prototype, 'language', {
+                        get: languageGetter,
+                        configurable: true
+                    });
+                    Object.defineProperty(Navigator.prototype, 'languages', {
+                        get: languagesGetter,
+                        configurable: true
+                    });
+                } catch (e) { }
+                try {
+                    Object.defineProperty(navigator, 'language', {
+                        get: languageGetter,
+                        configurable: true
+                    });
+                    Object.defineProperty(navigator, 'languages', {
+                        get: languagesGetter,
+                        configurable: true
+                    });
+                } catch (e) { }
+
                 // Save originals
                 const OrigDTF = Intl.DateTimeFormat;
                 const OrigNF = Intl.NumberFormat;
                 const OrigColl = Intl.Collator;
+                const OrigPluralRules = Intl.PluralRules;
                 
                 // Minimal hook - only inject default locale when not specified
                 const hookedDTF = function DateTimeFormat(locales, options) {
@@ -432,6 +558,25 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                 hookedColl.prototype = OrigColl.prototype;
                 hookedColl.supportedLocalesOf = OrigColl.supportedLocalesOf.bind(OrigColl);
                 Intl.Collator = makeNative(hookedColl, 'Collator');
+
+                if (OrigPluralRules) {
+                    const hookedPluralRules = function PluralRules(locales, options) {
+                        return new OrigPluralRules(locales || targetLang, options);
+                    };
+                    hookedPluralRules.prototype = OrigPluralRules.prototype;
+                    hookedPluralRules.supportedLocalesOf = OrigPluralRules.supportedLocalesOf.bind(OrigPluralRules);
+                    Intl.PluralRules = makeNative(hookedPluralRules, 'PluralRules');
+                }
+
+                try {
+                    const origResolvedOptions = Intl.DateTimeFormat.prototype.resolvedOptions;
+                    Intl.DateTimeFormat.prototype.resolvedOptions = makeNative(function resolvedOptions() {
+                        const result = origResolvedOptions.call(this);
+                        result.locale = targetLang;
+                        if (targetTimezone) result.timeZone = targetTimezone;
+                        return result;
+                    }, 'resolvedOptions');
+                } catch (e) { }
             }
 
             // --- P1: User-Agent 一致性 Hook ---
@@ -452,39 +597,6 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                             get: makeNative(function platform() { return fp.platform; }, 'platform'),
                             configurable: true
                         });
-                    }
-                }
-            } catch (e) { }
-
-            // --- P0: WebGL 渲染器伪装 ---
-            // Hook WebGLRenderingContext.getParameter 返回伪造的 GPU 信息
-            try {
-                if (fp.webgl && fp.webgl.vendor && fp.webgl.renderer) {
-                    const webglVendor = fp.webgl.vendor;
-                    const webglRenderer = fp.webgl.renderer;
-
-                    if (typeof WebGLRenderingContext !== 'undefined'
-                        && WebGLRenderingContext.prototype
-                        && typeof WebGLRenderingContext.prototype.getParameter === 'function') {
-                        const origGetParameter = WebGLRenderingContext.prototype.getParameter;
-                        const hookedGetParameter = function getParameter(param) {
-                            if (param === 37445) return webglVendor;
-                            if (param === 37446) return webglRenderer;
-                            return origGetParameter.call(this, param);
-                        };
-                        WebGLRenderingContext.prototype.getParameter = makeNative(hookedGetParameter, 'getParameter');
-                    }
-
-                    if (typeof WebGL2RenderingContext !== 'undefined'
-                        && WebGL2RenderingContext.prototype
-                        && typeof WebGL2RenderingContext.prototype.getParameter === 'function') {
-                        const origGetParameter2 = WebGL2RenderingContext.prototype.getParameter;
-                        const hookedGetParameter2 = function getParameter(param) {
-                            if (param === 37445) return webglVendor;
-                            if (param === 37446) return webglRenderer;
-                            return origGetParameter2.call(this, param);
-                        };
-                        WebGL2RenderingContext.prototype.getParameter = makeNative(hookedGetParameter2, 'getParameter');
                     }
                 }
             } catch (e) { }
@@ -523,109 +635,6 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                         };
                         document.fonts.check = makeNative(hookedFontsCheck, 'check');
                     }
-
-                    if (typeof CanvasRenderingContext2D !== 'undefined'
-                        && CanvasRenderingContext2D.prototype
-                        && typeof CanvasRenderingContext2D.prototype.measureText === 'function') {
-                        const origMeasureText = CanvasRenderingContext2D.prototype.measureText;
-                        const hookedMeasureText = function measureText(text) {
-                            const result = origMeasureText.call(this, text);
-                            try {
-                                const noise = ((fp.noiseSeed || 0) % 100) / 10000;
-                                const originalWidth = result.width;
-                                Object.defineProperty(result, 'width', {
-                                    get: function() { return originalWidth + noise; },
-                                    configurable: true
-                                });
-                            } catch (e) { }
-                            return result;
-                        };
-                        CanvasRenderingContext2D.prototype.measureText = makeNative(hookedMeasureText, 'measureText');
-                    }
-                }
-            } catch (e) { }
-
-            // --- P2: 插件列表伪装 ---
-            // Hook navigator.plugins 返回预设的 Chrome 插件
-            try {
-                (function() {
-                    const basePlugins = Array.isArray(fp.plugins) && fp.plugins.length > 0 ? fp.plugins : [
-                        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format', length: 1 },
-                        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '', length: 1 },
-                        { name: 'Native Client', filename: 'internal-nacl-plugin', description: '', length: 2 }
-                    ];
-
-                    const fakePlugins = basePlugins.map((p) => {
-                        const name = (p && p.name) ? String(p.name) : '';
-                        const filename = (p && p.filename) ? String(p.filename) : '';
-                        const description = (p && p.description) ? String(p.description) : '';
-                        const length = (p && Number.isFinite(p.length)) ? p.length : 1;
-                        const plugin = { name, filename, description, length };
-                        try { Object.defineProperty(plugin, Symbol.toStringTag, { value: 'Plugin', configurable: true }); } catch (e) { }
-                        plugin[0] = { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' };
-                        if (length > 1) plugin[1] = { type: 'application/x-nacl', suffixes: '', description: 'Native Client' };
-                        return plugin;
-                    });
-
-                    const fakePluginArray = {
-                        item: function(i) { return fakePlugins[i] || null; },
-                        namedItem: function(name) { return fakePlugins.find(p => p.name === name) || null; },
-                        refresh: function() {}
-                    };
-                    try {
-                        Object.defineProperty(fakePluginArray, Symbol.toStringTag, { value: 'PluginArray', configurable: true });
-                        fakePluginArray[Symbol.iterator] = function* () { yield* fakePlugins; };
-                    } catch (e) { }
-                    fakePlugins.forEach((p, i) => { fakePluginArray[i] = p; });
-                    try { Object.defineProperty(fakePluginArray, 'length', { value: fakePlugins.length, configurable: true }); } catch (e) { fakePluginArray.length = fakePlugins.length; }
-
-                    try {
-                        Object.defineProperty(Navigator.prototype, 'plugins', {
-                            get: makeNative(function plugins() { return fakePluginArray; }, 'plugins'),
-                            configurable: true
-                        });
-                    } catch (e) { }
-                })();
-            } catch (e) { }
-
-            // --- P2: 媒体设备伪装 ---
-            // Hook navigator.mediaDevices.enumerateDevices 返回虚拟设备
-            try {
-                if (navigator.mediaDevices && typeof navigator.mediaDevices.enumerateDevices === 'function') {
-                    const seededHex = (seed, len) => {
-                        let x = (seed >>> 0) || 1;
-                        let out = '';
-                        for (let i = 0; i < len; i++) {
-                            x = (x * 1664525 + 1013904223) >>> 0;
-                            out += (x & 0x0f).toString(16);
-                        }
-                        return out;
-                    };
-
-                    const seed = Number.isFinite(fp.noiseSeed) ? fp.noiseSeed : Math.floor(Math.random() * 0x7fffffff);
-                    const mkId = (n) => seededHex(seed + n, 64);
-                    const mkGroup = (n) => seededHex(seed + n, 32);
-
-                    const defaultDevices = [
-                        { deviceId: 'default', kind: 'audioinput', label: '', groupId: 'default' },
-                        { deviceId: mkId(1), kind: 'audioinput', label: '', groupId: mkGroup(1) },
-                        { deviceId: 'default', kind: 'audiooutput', label: '', groupId: 'default' },
-                        { deviceId: mkId(2), kind: 'audiooutput', label: '', groupId: mkGroup(1) },
-                        { deviceId: mkId(3), kind: 'videoinput', label: '', groupId: mkGroup(2) }
-                    ];
-
-                    const devices = (Array.isArray(fp.mediaDevices) && fp.mediaDevices.length > 0) ? fp.mediaDevices : defaultDevices;
-
-                    const hookedEnumerateDevices = async function enumerateDevices() {
-                        return devices.map(d => ({
-                            deviceId: String(d.deviceId || ''),
-                            kind: String(d.kind || ''),
-                            label: String(d.label || ''),
-                            groupId: String(d.groupId || ''),
-                            toJSON: function() { return { deviceId: this.deviceId, kind: this.kind, label: this.label, groupId: this.groupId }; }
-                        }));
-                    };
-                    navigator.mediaDevices.enumerateDevices = makeNative(hookedEnumerateDevices, 'enumerateDevices');
                 }
             } catch (e) { }
 
@@ -921,21 +930,50 @@ function getInjectScript(fp, profileName, watermarkStyle) {
             if (isEnabled('mediaDevices')) {
                 try {
                     if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
-                        const fakeDevices = [
-                            { deviceId: 'default', kind: 'audioinput', label: '', groupId: 'default' },
-                            { deviceId: crypto.randomUUID ? crypto.randomUUID() : 'audio-' + fp.noiseSeed, kind: 'audioinput', label: 'Default - Microphone', groupId: 'audio1' },
-                            { deviceId: crypto.randomUUID ? crypto.randomUUID() : 'audioout-' + fp.noiseSeed, kind: 'audiooutput', label: 'Default - Speakers', groupId: 'audio1' },
-                            { deviceId: crypto.randomUUID ? crypto.randomUUID() : 'video-' + fp.noiseSeed, kind: 'videoinput', label: 'Integrated Webcam', groupId: 'video1' }
+                        const seededHex = (seed, len) => {
+                            let x = (seed >>> 0) || 1;
+                            let out = '';
+                            for (let i = 0; i < len; i++) {
+                                x = (x * 1664525 + 1013904223) >>> 0;
+                                out += (x & 0x0f).toString(16);
+                            }
+                            return out;
+                        };
+
+                        const seed = Number.isFinite(fp.noiseSeed) ? fp.noiseSeed : 1;
+                        const mkId = (n) => seededHex(seed + n, 64);
+                        const mkGroup = (n) => seededHex(seed + n, 32);
+
+                        const shouldRevealLabels = () => permissionStates.microphone === 'granted' || permissionStates.camera === 'granted';
+
+                        const defaultDevices = [
+                            { deviceId: 'default', kind: 'audioinput', label: 'Default - Microphone', groupId: 'default' },
+                            { deviceId: mkId(1), kind: 'audioinput', label: 'Default - Microphone', groupId: mkGroup(1) },
+                            { deviceId: 'default', kind: 'audiooutput', label: 'Default - Speakers', groupId: 'default' },
+                            { deviceId: mkId(2), kind: 'audiooutput', label: 'Default - Speakers', groupId: mkGroup(1) },
+                            { deviceId: mkId(3), kind: 'videoinput', label: 'Integrated Webcam', groupId: mkGroup(2) }
                         ];
-                        
+
+                        const devices = (Array.isArray(fp.mediaDevices) && fp.mediaDevices.length > 0) ? fp.mediaDevices : defaultDevices;
+                        const normalized = devices.map((d, index) => ({
+                            deviceId: String(d && d.deviceId !== undefined ? d.deviceId : mkId(10 + index)),
+                            kind: String(d && d.kind !== undefined ? d.kind : ''),
+                            label: String(d && d.label !== undefined ? d.label : ''),
+                            groupId: String(d && d.groupId !== undefined ? d.groupId : mkGroup(10 + index)),
+                        }));
+
                         navigator.mediaDevices.enumerateDevices = makeNative(async function enumerateDevices() {
-                            return fakeDevices.map(d => ({
-                                deviceId: d.deviceId,
-                                kind: d.kind,
-                                label: d.label,
-                                groupId: d.groupId,
-                                toJSON: () => d
-                            }));
+                            const expose = shouldRevealLabels();
+                            return normalized.map((d) => {
+                                const item = {
+                                    deviceId: d.deviceId,
+                                    kind: d.kind,
+                                    label: expose ? d.label : '',
+                                    groupId: d.groupId,
+                                };
+                                item.toJSON = function() { return { deviceId: item.deviceId, kind: item.kind, label: item.label, groupId: item.groupId }; };
+                                return item;
+                            });
                         }, 'enumerateDevices');
                     }
                 } catch (e) { }
@@ -960,7 +998,7 @@ function getInjectScript(fp, profileName, watermarkStyle) {
                     if (watermarkStyle === 'banner') {
                         const banner = document.createElement('div');
                         banner.id = 'geekez-watermark';
-                        banner.style.cssText = 'position: fixed; top: 12px; right: 12px; max-width: min(320px, calc(100vw - 24px)); background: linear-gradient(135deg, rgba(37, 99, 235, 0.92), rgba(79, 70, 229, 0.9)); color: #fff; padding: 8px 36px 8px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; z-index: 2147483647; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.18); display: flex; align-items: center; gap: 8px; font-family: "Segoe UI", monospace; border: 1px solid rgba(255,255,255,0.18); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; backdrop-filter: blur(10px);';
+                        banner.style.cssText = ${JSON.stringify(WATERMARK_STYLES.banner)};
                         
                         const icon = document.createElement('span');
                         icon.textContent = '🔹';

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>GeekEZ 仪表盘</title>
+  <title data-i18n="page.title">GeekEZ 仪表盘</title>
   <style>
 __DASHBOARD_CSS__
   </style>
@@ -15,20 +15,22 @@ __DASHBOARD_CSS__
   <main class="shell">
     <header class="topbar card" data-reveal="1">
       <div class="brand-block">
-        <div class="eyebrow">GeekEZ Runtime Console</div>
-        <h1 class="title">仪表盘</h1>
+        <div class="eyebrow" data-i18n="brand.runtimeConsole">GeekEZ 运行时控制台</div>
+        <h1 class="title" data-i18n="page.dashboard">仪表盘</h1>
         <div class="meta-strip">
-          <span class="meta-chip">Profile <code id="pid"></code></span>
-          <span class="meta-chip">API <span id="api"></span></span>
-          <span class="meta-chip">最近刷新 <span id="lastUpdated">-</span></span>
+          <span class="meta-chip"><span data-i18n="meta.profile">环境</span> <code id="pid"></code></span>
+          <span class="meta-chip"><span data-i18n="meta.api">API</span> <span id="api"></span></span>
+          <span class="meta-chip"><span data-i18n="meta.lastUpdated">最近刷新</span> <span id="lastUpdated">-</span></span>
         </div>
       </div>
       <div class="top-actions">
-        <button class="btn primary" id="btnAll">刷新全部</button>
-        <button class="btn" id="btnIp">刷新 IP</button>
-        <button class="btn" id="btnNet">刷新网络信息</button>
-        <button class="btn warn" id="btnRestartSsh" hidden>重连 SSH</button>
-        <button class="btn" id="btnCopyWs">复制 WS</button>
+        <button class="btn primary" id="btnAll" data-i18n="button.refreshAll">刷新全部</button>
+        <button class="btn" id="btnIp" data-i18n="button.refreshIp">刷新 IP</button>
+        <button class="btn" id="btnNet" data-i18n="button.refreshNetinfo">刷新网络信息</button>
+        <button class="btn" id="btnProxyTest" data-i18n="button.testProxy">测试代理</button>
+        <button class="btn warn" id="btnRestartSsh" data-i18n="button.restartSsh" hidden>重连 SSH</button>
+        <button class="btn warn" id="btnRestartProfile" data-i18n="button.restartProfile">重启实例</button>
+        <button class="btn" id="btnCopyWs" data-i18n="button.copyWs">复制 WS</button>
       </div>
     </header>
 
@@ -38,16 +40,16 @@ __DASHBOARD_CSS__
 
     <section class="hero card" data-reveal="2">
       <div class="hero-main">
-        <div class="hero-label">代理出口</div>
+        <div class="hero-label" data-i18n="hero.proxyExit">代理出口</div>
         <div class="hero-ip" id="ip">-</div>
-        <div class="hero-source" id="ipMeta">来源: -</div>
+        <div class="hero-source"><span data-i18n="field.source">来源</span>: <span id="ipMeta">-</span></div>
         <div class="hero-facts">
           <div class="fact-row">
-            <span class="fact-k">名称</span>
+            <span class="fact-k" data-i18n="field.name">名称</span>
             <span class="fact-v" id="name">-</span>
           </div>
           <div class="fact-row">
-            <span class="fact-k">代理</span>
+            <span class="fact-k" data-i18n="hero.proxy">代理</span>
             <span class="fact-v mono" id="proxyMasked">-</span>
           </div>
         </div>
@@ -55,30 +57,30 @@ __DASHBOARD_CSS__
       <div class="hero-side">
         <div class="state-grid">
           <div class="state-card" data-state-card="runtime">
-            <div class="state-k">实例状态</div>
+            <div class="state-k" data-i18n="hero.instanceStatus">实例状态</div>
             <div class="state-pill">
               <span class="dot" id="dotRun"></span>
               <span id="runText">-</span>
             </div>
           </div>
           <div class="state-card" data-state-card="proxy">
-            <div class="state-k">代理类型</div>
+            <div class="state-k" data-i18n="hero.proxyType">代理类型</div>
             <div class="state-v" id="proxyType">-</div>
           </div>
           <div class="state-card" id="sshStateCard" data-state-card="ssh">
-            <div class="state-k">SSH 状态</div>
+            <div class="state-k" data-i18n="hero.sshStatus">SSH 状态</div>
             <div class="state-v" id="sshState">-</div>
-            <div class="state-sub" id="sshHint">当前未使用 SSH 代理</div>
+            <div class="state-sub" id="sshHint" data-i18n="hero.sshUnused">当前未使用 SSH 代理</div>
           </div>
           <div class="state-card" data-state-card="identity">
-            <div class="state-k">ProfileID</div>
+            <div class="state-k" data-i18n="hero.profileId">环境ID</div>
             <div class="state-v mono compact" id="profileInline">-</div>
           </div>
         </div>
         <div class="hero-actions">
-          <button class="btn subtle" id="btnCopyIp">复制 IP</button>
-          <button class="btn subtle" id="btnCopyProxy">复制代理</button>
-          <button class="btn subtle" id="btnCopyProfile">复制 ProfileID</button>
+          <button class="btn subtle" id="btnCopyIp" data-i18n="button.copyIp">复制 IP</button>
+          <button class="btn subtle" id="btnCopyProxy" data-i18n="button.copyProxy">复制代理</button>
+          <button class="btn subtle" id="btnCopyProfile" data-i18n="button.copyProfileId">复制环境ID</button>
         </div>
       </div>
     </section>
@@ -87,35 +89,47 @@ __DASHBOARD_CSS__
       <article class="card col-5" data-reveal="3">
         <div class="card-head">
           <div>
-            <div class="card-kicker">Geo / ASN</div>
-            <h2 class="card-title">网络信息</h2>
+            <div class="card-kicker" data-i18n="card.geoAsn">地理 / ASN</div>
+            <h2 class="card-title" data-i18n="card.netinfo">网络信息</h2>
           </div>
-          <div class="mini-pill">IP <span id="netIp">-</span></div>
+          <div class="mini-pill"><span data-i18n="meta.ip">IP</span> <span id="netIp">-</span></div>
         </div>
         <div class="field-grid">
           <div class="field">
-            <div class="field-k">位置</div>
+            <div class="field-k" data-i18n="field.location">位置</div>
             <div class="field-v" id="loc">-</div>
           </div>
           <div class="field">
-            <div class="field-k">时区</div>
+            <div class="field-k" data-i18n="field.timezone">时区</div>
             <div class="field-v" id="tz">-</div>
           </div>
           <div class="field">
-            <div class="field-k">ASN / 组织</div>
+            <div class="field-k" data-i18n="field.asnOrg">ASN / 组织</div>
             <div class="field-v" id="org">-</div>
           </div>
           <div class="field">
-            <div class="field-k">坐标</div>
+            <div class="field-k" data-i18n="field.coordinates">坐标</div>
             <div class="field-v mono" id="geo">-</div>
           </div>
           <div class="field">
-            <div class="field-k">邮编</div>
+            <div class="field-k" data-i18n="field.postal">邮编</div>
             <div class="field-v" id="postal">-</div>
           </div>
           <div class="field">
-            <div class="field-k">来源</div>
+            <div class="field-k" data-i18n="field.source">来源</div>
             <div class="field-v mono" id="netSource">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k" data-i18n="field.proxyTest">代理测试</div>
+            <div class="field-v" id="proxyTestStatus">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k" data-i18n="field.testLatency">测试延迟</div>
+            <div class="field-v mono" id="proxyTestLatency">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k" data-i18n="field.lastTest">最近测试</div>
+            <div class="field-v" id="proxyTestCheckedAt">-</div>
           </div>
         </div>
       </article>
@@ -123,39 +137,81 @@ __DASHBOARD_CSS__
       <article class="card col-7" data-reveal="4">
         <div class="card-head">
           <div>
-            <div class="card-kicker">Connectivity</div>
-            <h2 class="card-title">运行 / 调试</h2>
+            <div class="card-kicker" data-i18n="card.connectivity">连接能力</div>
+            <h2 class="card-title" data-i18n="card.runtimeDebug">运行 / 调试</h2>
           </div>
-          <div class="mini-pill">SSH <span id="sshStateMini">-</span></div>
+          <div class="mini-pill"><span data-i18n="common.ssh">SSH</span> <span id="sshStateMini">-</span></div>
         </div>
         <div class="stack">
           <div class="endpoint">
             <div class="endpoint-main">
-              <div class="field-k">WS</div>
+              <div class="field-k" data-i18n="field.wsEndpoint">WS 端点</div>
               <div class="field-v mono" id="ws">-</div>
             </div>
-            <button class="copy" id="copyWs">复制</button>
+            <button class="copy" id="copyWs" data-i18n="button.copy">复制</button>
           </div>
           <div class="endpoint">
             <div class="endpoint-main">
-              <div class="field-k">HTTP</div>
+              <div class="field-k" data-i18n="field.httpEndpoint">HTTP 端点</div>
               <div class="field-v mono" id="http">-</div>
             </div>
-            <button class="copy" id="copyHttp">复制</button>
+            <button class="copy" id="copyHttp" data-i18n="button.copy">复制</button>
           </div>
         </div>
         <div class="metric-strip">
           <div class="metric-box">
-            <div class="field-k">debugPort</div>
+            <div class="field-k" data-i18n="field.debugPort">调试端口</div>
             <div class="metric-v mono" id="debugPort">-</div>
           </div>
           <div class="metric-box">
-            <div class="field-k">localPort</div>
+            <div class="field-k" data-i18n="field.localPort">本地端口</div>
             <div class="metric-v mono" id="localPort">-</div>
           </div>
           <div class="metric-box">
-            <div class="field-k">sshLocalPort</div>
+            <div class="field-k" data-i18n="field.sshLocalPort">SSH 本地端口</div>
             <div class="metric-v mono" id="sshLocalPort">-</div>
+          </div>
+        </div>
+        <div class="field-grid" style="margin-top:14px;">
+          <div class="field">
+            <div class="field-k" data-i18n="field.resolvedTimezone">解析时区</div>
+            <div class="field-v mono" id="resolvedTimezone">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k" data-i18n="field.resolvedLanguage">解析语言</div>
+            <div class="field-v mono" id="resolvedLanguage">-</div>
+          </div>
+          <div class="field field-wide">
+            <div class="field-k" data-i18n="field.acceptLanguageHeader">语言请求头 (Accept-Language)</div>
+            <div class="field-v mono" id="resolvedAcceptLanguage">-</div>
+          </div>
+          <div class="field field-wide">
+            <div class="field-k" data-i18n="field.resolvedGeo">解析地理位置</div>
+            <div class="field-v mono" id="resolvedGeolocation">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k" data-i18n="field.geoPermission">地理位置权限</div>
+            <div class="field-v mono" id="geoPermissionState">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k" data-i18n="field.cameraPermission">摄像头权限</div>
+            <div class="field-v mono" id="cameraPermissionState">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k" data-i18n="field.microphonePermission">麦克风权限</div>
+            <div class="field-v mono" id="microphonePermissionState">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k" data-i18n="field.notificationPermission">通知权限</div>
+            <div class="field-v mono" id="notificationPermissionState">-</div>
+          </div>
+          <div class="field">
+            <div class="field-k" data-i18n="field.headerPreset">请求头预设</div>
+            <div class="field-v mono" id="activeHeaderPreset">-</div>
+          </div>
+          <div class="field field-wide">
+            <div class="field-k" data-i18n="field.calibration">自动校准</div>
+            <div class="field-v" id="autoCalibrationError">-</div>
           </div>
         </div>
       </article>
@@ -163,32 +219,32 @@ __DASHBOARD_CSS__
       <article class="card col-6" data-reveal="5">
         <div class="card-head">
           <div>
-            <div class="card-kicker">Profile Metadata</div>
-            <h2 class="card-title">Profile 信息</h2>
+            <div class="card-kicker" data-i18n="card.profileMetadata">环境元数据</div>
+            <h2 class="card-title" data-i18n="card.profileInfo">环境信息</h2>
           </div>
         </div>
         <div class="field-grid">
           <div class="field">
-            <div class="field-k">名称</div>
+            <div class="field-k" data-i18n="field.name">名称</div>
             <div class="field-v" id="pName">-</div>
           </div>
           <div class="field">
-            <div class="field-k">创建时间</div>
+            <div class="field-k" data-i18n="field.createdAt">创建时间</div>
             <div class="field-v" id="createdAt">-</div>
           </div>
           <div class="field field-wide">
-            <div class="field-k">备注</div>
+            <div class="field-k" data-i18n="field.remark">备注</div>
             <div class="endpoint no-pad">
               <div class="field-v" id="remark">-</div>
-              <button class="copy" id="copyRemark">复制</button>
+              <button class="copy" id="copyRemark" data-i18n="button.copy">复制</button>
             </div>
           </div>
           <div class="field">
-            <div class="field-k">preProxyOverride</div>
+            <div class="field-k" data-i18n="field.preProxyOverride">前置代理覆盖</div>
             <div class="field-v mono" id="preProxyOverride">-</div>
           </div>
           <div class="field">
-            <div class="field-k">标签</div>
+            <div class="field-k" data-i18n="field.tags">标签</div>
             <div class="tag-list" id="tags">-</div>
           </div>
         </div>
@@ -197,30 +253,30 @@ __DASHBOARD_CSS__
       <article class="card col-6" id="acctCard" hidden data-reveal="6">
         <div class="card-head">
           <div>
-            <div class="card-kicker">Account Tools</div>
-            <h2 class="card-title">账号 / 2FA</h2>
+            <div class="card-kicker" data-i18n="card.accountTools">账号工具</div>
+            <h2 class="card-title" data-i18n="card.account2fa">账号 / 2FA</h2>
           </div>
         </div>
         <div class="field-grid">
           <div class="field">
-            <div class="field-k">邮箱</div>
+            <div class="field-k" data-i18n="field.email">邮箱</div>
             <div class="field-v mono" id="acctEmail">-</div>
           </div>
           <div class="field">
-            <div class="field-k">辅助邮箱</div>
+            <div class="field-k" data-i18n="field.auxEmail">辅助邮箱</div>
             <div class="field-v mono" id="acctAux">-</div>
           </div>
           <div class="field field-wide">
-            <div class="field-k">动态码</div>
+            <div class="field-k" data-i18n="field.otpCode">动态码</div>
             <div class="otp-box">
               <div class="otp-code mono" id="otpCode">------</div>
               <div class="otp-side">
-                <div class="mini-pill">剩余 <span id="otpRemain">-</span>s</div>
+                <div class="mini-pill"><span data-i18n="field.remaining">剩余</span> <span id="otpRemain">-</span><span data-i18n="common.secondsShort">秒</span></div>
                 <div class="progress"><div id="otpBar"></div></div>
               </div>
               <div class="otp-actions">
-                <button class="copy" id="copyOtp">复制</button>
-                <a class="text-link" id="otpFallback" href="#" target="_blank" rel="noreferrer" hidden>2fa.show</a>
+                <button class="copy" id="copyOtp" data-i18n="button.copy">复制</button>
+                <a class="text-link" id="otpFallback" href="#" target="_blank" rel="noreferrer" data-i18n="link.open2faShow" hidden>打开 2fa.show</a>
               </div>
             </div>
           </div>
@@ -230,23 +286,165 @@ __DASHBOARD_CSS__
       <article class="card col-12" data-reveal="7">
         <div class="card-head">
           <div>
-            <div class="card-kicker">Advanced Diagnostics</div>
-            <h2 class="card-title">原始信息</h2>
+            <div class="card-kicker" data-i18n="card.unifiedVerdict">统一判定</div>
+            <h2 class="card-title" data-i18n="card.unifiedVerdictCn">统一判定</h2>
+          </div>
+          <div class="mini-pill" id="verdictStatus">-</div>
+        </div>
+        <div class="metric-strip">
+          <div class="metric-box">
+            <div class="field-k" data-i18n="field.local">本地</div>
+            <div class="metric-v mono" id="verdictLocalStatus">-</div>
+          </div>
+          <div class="metric-box">
+            <div class="field-k" data-i18n="field.external">外部</div>
+            <div class="metric-v mono" id="verdictExternalStatus">-</div>
+          </div>
+          <div class="metric-box">
+            <div class="field-k" data-i18n="field.agreement">一致性</div>
+            <div class="metric-v mono" id="verdictAgreement">-</div>
+          </div>
+        </div>
+        <div class="verdict-summary">
+          <div class="verdict-headline" id="verdictHeadline">-</div>
+          <div class="verdict-text" id="verdictSummary">-</div>
+        </div>
+        <div class="verdict-grid">
+          <section class="verdict-panel">
+            <div class="verdict-panel-title" data-i18n="section.latestExternalRun">最近一次外部检测</div>
+            <div id="verdictLatestRun"></div>
+          </section>
+          <section class="verdict-panel">
+            <div class="verdict-panel-title" data-i18n="section.siteStatuses">站点状态</div>
+            <div id="verdictSiteStatuses"></div>
+          </section>
+        </div>
+        <section class="verdict-panel verdict-panel-wide">
+          <div class="verdict-panel-title" data-i18n="section.keyWarnings">关键告警</div>
+          <div id="verdictWarnings"></div>
+        </section>
+        <section class="verdict-panel verdict-panel-wide pixelscan-fix" id="pixelscanFixBar" hidden>
+          <div class="verdict-panel-title" data-i18n="section.pixelscanFix">Pixelscan 修复建议</div>
+          <div class="pixelscan-fix-row">
+            <div class="pixelscan-fix-text" id="pixelscanFixText">-</div>
+            <div class="pixelscan-fix-actions">
+              <button class="btn warn" type="button" id="btnPixelscanCompat" data-i18n="button.applyPixelscanCompat">应用兼容预设</button>
+            </div>
+          </div>
+        </section>
+        <div class="check-list" id="verdictList"></div>
+      </article>
+
+      <article class="card col-7" data-reveal="8">
+        <div class="card-head">
+          <div>
+            <div class="card-kicker" data-i18n="card.selfCheck">自检</div>
+            <h2 class="card-title" data-i18n="card.diagnosticWorkbench">检测工作台</h2>
+          </div>
+          <div class="mini-pill" id="selfCheckStatus">-</div>
+        </div>
+        <div class="metric-strip">
+          <div class="metric-box">
+            <div class="field-k" data-i18n="field.geoPermission">地理位置权限</div>
+            <div class="metric-v mono" id="diagGeoPermission">-</div>
+          </div>
+          <div class="metric-box">
+            <div class="field-k" data-i18n="field.headerPreset">请求头预设</div>
+            <div class="metric-v mono" id="diagHeaderPreset">-</div>
+          </div>
+        </div>
+        <div class="check-list" id="selfCheckList"></div>
+        <div class="advanced-stack" style="margin-top:14px;">
+          <details>
+            <summary data-i18n="section.headerPreview">请求头预览</summary>
+            <pre id="headerPreview">-</pre>
+          </details>
+          <details>
+            <summary data-i18n="section.permissionSnapshot">权限快照</summary>
+            <pre id="permissionSnapshot">-</pre>
+          </details>
+          <details>
+            <summary data-i18n="section.acceptChProbe">Accept-CH 探针</summary>
+            <pre id="acceptChProbe">-</pre>
+          </details>
+          <details>
+            <summary data-i18n="section.webgpuSnapshot">WebGPU 快照</summary>
+            <pre id="webgpuSnapshot">-</pre>
+          </details>
+          <details>
+            <summary data-i18n="section.fontsSnapshot">字体快照</summary>
+            <pre id="fontsSnapshot">-</pre>
+          </details>
+          <details>
+            <summary data-i18n="section.mediaDevicesSnapshot">媒体设备快照</summary>
+            <pre id="mediaDevicesSnapshot">-</pre>
+          </details>
+        </div>
+      </article>
+
+      <article class="card col-5" data-reveal="9">
+        <div class="card-head">
+          <div>
+            <div class="card-kicker" data-i18n="card.detectionPresets">检测预设</div>
+            <h2 class="card-title" data-i18n="card.thirdPartySites">第三方检测站</h2>
+          </div>
+          <div class="card-actions">
+            <button class="btn subtle" type="button" id="btnDiagRunAll" data-i18n="button.runAll">运行全部</button>
+          </div>
+        </div>
+        <div class="preset-grid" id="diagnosticPresetList"></div>
+      </article>
+
+      <article class="card col-12" data-reveal="10">
+        <div class="card-head">
+          <div>
+            <div class="card-kicker" data-i18n="card.recentRuns">最近记录</div>
+            <h2 class="card-title" data-i18n="card.recentRunsCn">最近检测记录</h2>
+          </div>
+          <div class="card-actions">
+            <button class="btn subtle" type="button" id="btnDiagClear" data-i18n="button.clearHistory">清空记录</button>
+          </div>
+        </div>
+        <div class="diag-subsection">
+          <div class="diag-subtitle" data-i18n="section.latestByPreset">各预设最新结果</div>
+          <div class="diag-mini-grid" id="diagnosticPresetLatest"></div>
+        </div>
+        <div class="recent-runs" id="diagnosticRecentRuns"></div>
+      </article>
+
+      <article class="card col-12" data-reveal="11">
+        <div class="card-head">
+          <div>
+            <div class="card-kicker" data-i18n="card.advancedDiagnostics">高级诊断</div>
+            <h2 class="card-title" data-i18n="card.rawInfo">原始信息</h2>
           </div>
         </div>
         <div class="advanced-stack">
           <details open>
-            <summary>指纹配置</summary>
+            <summary data-i18n="section.fingerprintConfig">指纹配置</summary>
             <pre id="fingerprint">-</pre>
           </details>
           <details>
-            <summary>浏览器信息</summary>
+            <summary data-i18n="section.browserInfo">浏览器信息</summary>
             <pre id="browserInfo">-</pre>
           </details>
         </div>
       </article>
     </section>
   </main>
+
+  <div class="diag-modal" id="diagnosticDetailModal" hidden>
+    <div class="diag-modal-card">
+      <div class="diag-modal-head">
+        <div>
+          <div class="card-kicker" data-i18n="card.diagnosticDetails">检测详情</div>
+          <h3 class="diag-modal-title" id="diagnosticDetailTitle" data-i18n="modal.diagnosticDetailTitle">检测详情</h3>
+        </div>
+        <button class="btn subtle" type="button" id="diagnosticDetailClose" data-i18n="button.close">关闭</button>
+      </div>
+      <div class="diag-modal-body" id="diagnosticDetailContent"></div>
+    </div>
+  </div>
 
   <script>
 __DASHBOARD_JS__

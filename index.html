@@ -148,7 +148,10 @@
             }
         }
 
-        input,
+        input:not([type]),
+        input[type="text"],
+        input[type="number"],
+        input[type="password"],
         textarea,
         select {
             background: var(--input-bg);
@@ -163,11 +166,23 @@
             font-size: 12px;
         }
 
-        input:focus,
+        input:not([type]):focus,
+        input[type="text"]:focus,
+        input[type="number"]:focus,
+        input[type="password"]:focus,
         textarea:focus,
         select:focus {
             border-color: var(--accent);
             outline: none;
+        }
+
+        input[type="checkbox"],
+        input[type="radio"] {
+            width: auto;
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            accent-color: var(--accent);
         }
 
         button {
@@ -241,11 +256,25 @@
             display: flex;
             align-items: center;
             justify-content: center;
+            background: transparent;
+            box-shadow: none;
             transition: 0.2s;
         }
 
         .icon-btn:hover {
             color: var(--accent);
+            background: transparent;
+            box-shadow: none;
+        }
+
+        .selection-toggle[data-state="partial"],
+        .selection-toggle[data-state="all"] {
+            color: var(--accent);
+        }
+
+        .selection-toggle[data-state="disabled"] {
+            opacity: 0.35;
+            pointer-events: none;
         }
 
         .lang-btn {
@@ -294,6 +323,7 @@
         .sub-left {
             display: flex;
             gap: 10px;
+            align-items: center;
         }
 
         .sub-right {
@@ -302,22 +332,60 @@
             align-items: center;
         }
 
-        .search-box {
+        .sub-right-icons {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 2px;
+        }
+
+        input.search-box {
             background: var(--input-bg);
             border: 1px solid var(--border);
             color: var(--text-primary);
+            box-sizing: border-box;
+            height: 30px;
             padding: 4px 10px;
             border-radius: 15px;
-            width: 220px;
+            width: 186px;
             font-size: 12px;
+            line-height: 20px;
             margin: 0;
             transition: width 0.3s;
         }
 
-        .search-box:focus {
+        input.search-box:focus {
             border-color: var(--accent);
             outline: none;
-            width: 260px;
+            width: 226px;
+        }
+
+        .sub-right .icon-btn,
+        .sub-right .icon-btn:hover,
+        .sub-right .icon-btn:focus,
+        .sub-right .icon-btn:active {
+            background: transparent !important;
+            box-shadow: none !important;
+        }
+
+        .sub-right .icon-btn svg {
+            display: block;
+        }
+
+        .list-filter-select {
+            height: 28px;
+            padding: 0 8px;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            border-radius: 8px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .list-filter-select:focus {
+            outline: none;
+            border-color: var(--accent);
         }
 
         .layout {
@@ -368,6 +436,9 @@
             grid-auto-rows: min-content;
             align-content: start;
             gap: 10px;
+            padding-top: 3px;
+            padding-bottom: 3px;
+            box-sizing: border-box;
         }
 
         .card {
@@ -396,10 +467,26 @@
             transform: translateX(2px);
         }
 
+        .profile-item.selected-profile {
+            border-color: rgba(0, 224, 255, 0.6);
+            box-shadow: 0 0 0 1px rgba(0, 224, 255, 0.14) inset;
+            background: linear-gradient(180deg, rgba(0, 224, 255, 0.06), transparent 55%), var(--card-bg);
+        }
+
         .profile-info h4 {
             margin: 0 0 5px 0;
             font-size: 15px;
             color: var(--text-primary);
+        }
+
+        .profile-title-row {
+            display: flex;
+            align-items: center;
+            min-width: 0;
+        }
+
+        .profile-title-row h4 {
+            margin: 0;
         }
 
         .profile-meta {
@@ -408,6 +495,355 @@
             display: flex;
             gap: 10px;
             align-items: center;
+        }
+
+        .proxy-status-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            min-width: 10px;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: transform 0.15s;
+            border: 1.5px solid var(--text-secondary);
+            background: transparent;
+            margin-left: 8px;
+        }
+
+        .proxy-status-dot:hover {
+            transform: scale(1.4);
+        }
+
+        .proxy-status-dot[data-status="ok"] {
+            background: #27ae60;
+            border-color: #27ae60;
+        }
+
+        .proxy-status-dot[data-status="warn"] {
+            background: #f64e60;
+            border-color: #f64e60;
+        }
+
+        .proxy-status-dot.testing {
+            border-color: var(--accent);
+            animation: dotPulse 0.8s infinite;
+        }
+
+        @keyframes dotPulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.7); }
+        }
+
+        .profile-diagnostics {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px dashed rgba(255, 255, 255, 0.08);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .profile-proxy-status {
+            margin-top: 8px;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.025);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .proxy-summary-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .proxy-summary-meta {
+            font-size: 10px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            word-break: break-word;
+        }
+
+        .diag-status-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .diag-pill,
+        .diag-count {
+            display: inline-flex;
+            align-items: center;
+            min-height: 20px;
+            padding: 0 7px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.03);
+            font-size: 10px;
+            font-weight: bold;
+        }
+
+        .diag-pill[data-status="ok"] {
+            color: #27ae60;
+            border-color: rgba(39, 174, 96, 0.35);
+        }
+
+        .diag-pill[data-status="warn"] {
+            color: #f39c12;
+            border-color: rgba(243, 156, 18, 0.35);
+        }
+
+        .diag-pill[data-status="info"],
+        .diag-count {
+            color: var(--text-secondary);
+        }
+
+        .diag-summary-text {
+            font-size: 11px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            word-break: break-word;
+        }
+
+        .diag-preset-section {
+            margin-top: 8px;
+        }
+
+        .diag-preset-title {
+            font-size: 10px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .diag-preset-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
+        .diag-preset-btn {
+            display: inline-flex;
+            align-items: center;
+            min-height: 22px;
+            padding: 0 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text-secondary);
+            font-size: 10px;
+            text-transform: none;
+        }
+
+        .diag-preset-btn[data-status="ok"] {
+            border-color: rgba(39, 174, 96, 0.28);
+            color: #27ae60;
+        }
+
+        .diag-preset-btn[data-status="warn"] {
+            border-color: rgba(243, 156, 18, 0.32);
+            color: #f39c12;
+        }
+
+        .diag-preset-btn[data-active="true"] {
+            box-shadow: 0 0 0 1px rgba(0, 224, 255, 0.18) inset;
+        }
+
+        .diag-latest-box,
+        .diag-latest-empty {
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.025);
+        }
+
+        .diag-latest-box[data-status="ok"] {
+            border-color: rgba(39, 174, 96, 0.2);
+        }
+
+        .diag-latest-box[data-status="warn"] {
+            border-color: rgba(243, 156, 18, 0.24);
+            background: rgba(243, 156, 18, 0.06);
+        }
+
+        .diag-latest-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            align-items: flex-start;
+        }
+
+        .diag-latest-title {
+            font-size: 12px;
+            font-weight: bold;
+            color: var(--text-primary);
+            line-height: 1.4;
+        }
+
+        .diag-latest-time,
+        .diag-latest-meta,
+        .diag-latest-empty {
+            font-size: 10px;
+            color: var(--text-secondary);
+        }
+
+        .diag-latest-meta {
+            margin-top: 4px;
+        }
+
+        .diag-latest-text {
+            margin-top: 6px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            word-break: break-word;
+        }
+
+        .diag-compare-box {
+            margin-top: 8px;
+            padding: 8px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.025);
+        }
+
+        .diag-compare-box[data-changed="true"] {
+            border-color: rgba(243, 156, 18, 0.28);
+            background: rgba(243, 156, 18, 0.06);
+        }
+
+        .diag-compare-text {
+            font-size: 10px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            word-break: break-word;
+        }
+
+        .diag-compare-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
+        .diag-compare-chip {
+            display: inline-flex;
+            align-items: center;
+            min-height: 20px;
+            padding: 0 7px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text-secondary);
+            font-size: 10px;
+        }
+
+        .diag-signal-list,
+        .diag-fact-list,
+        .diag-artifact-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .diag-signal-chip,
+        .diag-mini-btn {
+            display: inline-flex;
+            align-items: center;
+            min-height: 22px;
+            padding: 0 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            font-size: 10px;
+        }
+
+        .diag-signal-chip {
+            color: var(--text-secondary);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .diag-fact-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            min-height: 22px;
+            padding: 0 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.035);
+            font-size: 10px;
+            line-height: 1.4;
+            max-width: 100%;
+        }
+
+        .diag-fact-chip[data-status="ok"] {
+            border-color: rgba(39, 174, 96, 0.28);
+        }
+
+        .diag-fact-chip[data-status="warn"] {
+            border-color: rgba(243, 156, 18, 0.32);
+            background: rgba(243, 156, 18, 0.08);
+        }
+
+        .diag-fact-label {
+            color: var(--text-primary);
+            font-weight: bold;
+        }
+
+        .diag-fact-value {
+            color: var(--text-secondary);
+            word-break: break-word;
+        }
+
+        .diag-mini-btn {
+            text-transform: none;
+            height: 22px;
+            background: transparent;
+            color: var(--accent);
+            border-color: rgba(0, 224, 255, 0.2);
+        }
+
+        .diag-mini-btn:hover {
+            background: rgba(0, 224, 255, 0.08);
+        }
+
+        .diag-actions-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .diag-action {
+            height: 24px;
+            padding: 0 8px;
+            font-size: 10px;
+            text-transform: none;
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+
+        .diag-action:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .diag-action.danger {
+            border-color: rgba(246, 78, 96, 0.4);
+            color: var(--danger);
+        }
+
+        .diag-action.danger:hover {
+            background: rgba(246, 78, 96, 0.12);
         }
 
         .tag {
@@ -453,6 +889,17 @@
 
         .main-list.grid-view .profile-info {
             width: 100%;
+        }
+
+        .main-list.grid-view .profile-title-row {
+            padding-right: 18px;
+        }
+
+        .main-list.grid-view .proxy-status-dot {
+            position: absolute;
+            top: 10px;
+            right: 12px;
+            margin-left: 0;
         }
 
         .main-list.grid-view .profile-meta {
@@ -719,7 +1166,7 @@
             color: var(--text-primary);
         }
 
-        .icon-btn:hover {
+        .top-actions .icon-btn:hover {
             color: var(--text-primary);
             background: rgba(255, 255, 255, 0.1);
         }
@@ -741,10 +1188,69 @@
             border: 2px solid var(--card-bg);
         }
 
+        .inline-alert-badge {
+            display: none;
+            min-width: 18px;
+            height: 18px;
+            padding: 0 6px;
+            border-radius: 999px;
+            background: rgba(246, 78, 96, 0.14);
+            border: 1px solid rgba(246, 78, 96, 0.4);
+            color: var(--danger);
+            font-size: 10px;
+            font-weight: bold;
+            line-height: 16px;
+            text-align: center;
+            box-sizing: border-box;
+            flex-shrink: 0;
+        }
+
+        .inline-alert-badge.active {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
         .tab-btn.active {
             color: var(--accent);
             border-bottom: 2px solid var(--accent);
             background: rgba(255, 255, 255, 0.05);
+        }
+
+        #proxyManagerTab-library>.tab-header {
+            position: sticky;
+            top: 0;
+            z-index: 5;
+            background: linear-gradient(180deg, rgba(20, 24, 32, 0.96), rgba(20, 24, 32, 0.82));
+            backdrop-filter: blur(10px);
+            padding-top: 2px;
+        }
+
+        #proxyLibrarySubTab-proxies>div,
+        #proxyLibrarySubTab-sources>div {
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+        }
+
+        #proxyManagerTab-library details>summary {
+            list-style: none;
+        }
+
+        #proxyManagerTab-library details>summary::-webkit-details-marker {
+            display: none;
+        }
+
+        #proxyManagerTab-library details[open]>summary {
+            border-color: var(--accent) !important;
+            background: rgba(0, 224, 255, 0.08);
+            color: var(--accent) !important;
+        }
+
+        #proxyManagerTab-library details[open]>div {
+            animation: fadeIn 0.18s ease;
+        }
+
+        #savedProfileProxySelectionToolbar {
+            box-shadow: inset 0 0 0 1px rgba(0, 224, 255, 0.08);
         }
 
         .help-section {
@@ -1208,7 +1714,11 @@
                     type="checkbox" id="enablePreProxy" style="width:auto; margin:0;"> <span
                     data-i18n="enablePreProxy">Chain Proxy</span></label>
             <span id="currentProxyDisplay" class="status-badge">OFF</span>
-            <button class="outline" onclick="openProxyManager()" data-i18n="manageChain">⚙️ Proxy Chain</button>
+            <button class="outline" id="proxyManagerBtn" onclick="openProxyManager()"
+                style="display:flex; align-items:center; gap:8px;">
+                <span data-i18n="manageChain">Proxy Manager</span>
+                <span id="proxyManagerAlertBadge" class="inline-alert-badge" aria-hidden="true"></span>
+            </button>
         </div>
         <div style="display:flex; gap:10px;">
             <button class="outline" onclick="openExportModal()" data-i18n="btnExport">📤 Export</button>
@@ -1235,18 +1745,31 @@
     </div>
 
     <div class="sub-toolbar">
-        <div class="sub-left"><button onclick="openAddModal()" data-i18n="newProfile"
-                style="background:var(--accent);color:var(--bg-color);">+ New Profile</button></div>
+        <div class="sub-left">
+            <button onclick="openAddModal()" data-i18n="newProfile"
+                style="background:var(--accent);color:var(--bg-color);">+ New Profile</button>
+            <button class="outline" id="btnBatchProxyTest" onclick="runSelectedProfileProxyTests(this)" data-i18n="batchProxyTestBtn">Test Proxy</button>
+            <button class="outline" id="btnBatchBindSavedProxy" onclick="openBatchSavedProxyBindModal()" data-i18n="batchBindSavedProxyBtn">Bind Saved Proxy</button>
+        </div>
         <div class="sub-right">
             <input type="text" id="searchInput" class="search-box" placeholder="Search..."
                 oninput="filterProfiles(this.value)">
-            <div class="icon-btn" onclick="toggleViewMode()" title="Toggle View"><svg id="viewIcon" viewBox="0 0 24 24"
-                    width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="3" y="3" width="7" height="7" />
-                    <rect x="14" y="3" width="7" height="7" />
-                    <rect x="14" y="14" width="7" height="7" />
-                    <rect x="3" y="14" width="7" height="7" />
-                </svg></div>
+            <div class="sub-right-icons">
+                <div class="icon-btn" onclick="toggleViewMode()" title="Toggle View"><svg id="viewIcon" viewBox="0 0 24 24"
+                        width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="7" />
+                        <rect x="14" y="3" width="7" height="7" />
+                        <rect x="14" y="14" width="7" height="7" />
+                        <rect x="3" y="14" width="7" height="7" />
+                    </svg></div>
+                <div class="icon-btn selection-toggle" id="btnToggleSelection" onclick="toggleVisibleProfileSelection()"
+                    data-i18n-title="selectVisibleProfiles" data-state="none">
+                    <svg id="selectionIcon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+                        stroke-width="2">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                    </svg>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1275,6 +1798,18 @@
                     spellcheck="false" autocomplete="off"></textarea>
                 <div style="font-size:10px; opacity:0.5; margin-bottom:8px;" data-i18n="batchHint">Multiple links =
                     batch create profiles</div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:-2px 0 10px;">
+                    <button type="button" class="outline" onclick="testAddProxyConfig()" data-i18n="proxyTestBtn">Test Proxy</button>
+                    <span style="font-size:10px; opacity:0.58;" data-i18n="proxyTestBatchHint">If multiple proxy lines exist, only the first line is tested.</span>
+                </div>
+                <div style="margin:-4px 0 8px;">
+                    <label data-i18n="savedProxyLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Saved Proxy</label>
+                    <select id="addSavedProxyId" onchange="handleSavedProfileProxyChange('add')"></select>
+                    <div id="addSavedProxyInfo" style="font-size:10px; opacity:0.58; margin-top:4px;" data-i18n="proxySourceManualHint">
+                        Leave empty to use the manual proxy text below.
+                    </div>
+                </div>
+                <div id="addProxyTestResult" style="display:none; margin-bottom:12px; padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:rgba(255,255,255,0.02); font-size:12px; line-height:1.55;"></div>
                 <div style="margin-bottom:12px;">
                     <label data-i18n="screenRes"
                         style="font-size:11px; font-weight:bold; opacity:0.8;">Res</label>
@@ -1300,6 +1835,68 @@
                     <input type="text" id="addLanguage" placeholder="Type to search language..." autocomplete="off">
                     <div class="timezone-dropdown" id="addLanguageDropdown"></div>
                 </div>
+                <label data-i18n="startupUrlsLabel"
+                    style="font-size:11px; font-weight:bold; opacity:0.8; margin-top:8px; display:block;">Startup URLs</label>
+                <textarea id="addStartupUrls" rows="3" placeholder="https://example.com&#10;https://another.example"
+                    spellcheck="false" autocomplete="off"></textarea>
+                <div style="font-size:10px; opacity:0.55; margin-top:4px;" data-i18n="startupUrlsHint">
+                    One URL per line. Open automatically after launch.
+                </div>
+                <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+                    <div style="flex:1; min-width:220px;">
+                        <label data-i18n="headerPresetLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Header Preset</label>
+                        <select id="addHeaderPresetId"></select>
+                    </div>
+                    <div style="flex:1; min-width:220px;">
+                        <label data-i18n="geoPermissionLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Geo Permission</label>
+                        <select id="addGeoPermissionMode">
+                            <option value="auto" data-i18n="geoPermissionAuto">Auto</option>
+                            <option value="granted" data-i18n="geoPermissionGranted">Granted</option>
+                            <option value="prompt" data-i18n="geoPermissionPrompt">Prompt</option>
+                            <option value="denied" data-i18n="geoPermissionDenied">Denied</option>
+                        </select>
+                    </div>
+                    <div style="flex:1; min-width:220px;">
+                        <label data-i18n="cameraPermissionLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Camera Permission</label>
+                        <select id="addCameraPermissionMode">
+                            <option value="auto" data-i18n="geoPermissionAuto">Auto</option>
+                            <option value="granted" data-i18n="geoPermissionGranted">Granted</option>
+                            <option value="prompt" data-i18n="geoPermissionPrompt">Prompt</option>
+                            <option value="denied" data-i18n="geoPermissionDenied">Denied</option>
+                        </select>
+                    </div>
+                    <div style="flex:1; min-width:220px;">
+                        <label data-i18n="microphonePermissionLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Microphone Permission</label>
+                        <select id="addMicrophonePermissionMode">
+                            <option value="auto" data-i18n="geoPermissionAuto">Auto</option>
+                            <option value="granted" data-i18n="geoPermissionGranted">Granted</option>
+                            <option value="prompt" data-i18n="geoPermissionPrompt">Prompt</option>
+                            <option value="denied" data-i18n="geoPermissionDenied">Denied</option>
+                        </select>
+                    </div>
+                    <div style="flex:1; min-width:220px;">
+                        <label data-i18n="notificationPermissionLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Notification Permission</label>
+                        <select id="addNotificationPermissionMode">
+                            <option value="auto" data-i18n="geoPermissionAuto">Auto</option>
+                            <option value="granted" data-i18n="geoPermissionGranted">Granted</option>
+                            <option value="prompt" data-i18n="geoPermissionPrompt">Prompt</option>
+                            <option value="denied" data-i18n="geoPermissionDenied">Denied</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="margin-top:12px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
+                        <label data-i18n="profileExtensionsLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Profile Extensions</label>
+                        <label style="display:flex; align-items:center; gap:6px; font-size:11px; opacity:0.8;">
+                            <input type="checkbox" id="addUseGlobalExtensions" checked>
+                            <span data-i18n="profileUseGlobalExtensions">Load shared extensions</span>
+                        </label>
+                    </div>
+                    <div id="addProfileExtensionList" style="display:flex; flex-direction:column; gap:8px;"></div>
+                    <div style="font-size:10px; opacity:0.55; margin-top:4px;" data-i18n="profileExtensionsHint">
+                        Select extensions from the shared library in Settings.
+                    </div>
+                </div>
                 <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 10px;"
                     data-i18n="autoFingerprint">* Auto Fingerprint</div>
             </div>
@@ -1317,8 +1914,9 @@
             
             <!-- Tab Header -->
             <div class="tab-header" style="padding: 0 15px; border-bottom: 1px solid var(--border);">
-                <div class="tab-btn active" onclick="switchEditTab('basic')" data-i18n="editTabBasic">Basic</div>
-                <div class="tab-btn" onclick="switchEditTab('fingerprint')" data-i18n="editTabFingerprint">Fingerprint</div>
+                <div class="tab-btn active" data-edit-tab="basic" onclick="switchEditTab('basic')" data-i18n="editTabBasic">Basic</div>
+                <div class="tab-btn" data-edit-tab="fingerprint" onclick="switchEditTab('fingerprint')" data-i18n="editTabFingerprint">Fingerprint</div>
+                <div class="tab-btn" data-edit-tab="backup" onclick="switchEditTab('backup')" data-i18n="editTabBackupMigration">Backup & Migration</div>
             </div>
 
             <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
@@ -1350,9 +1948,83 @@
                         <input type="text" id="editLanguage" placeholder="Type to search language..." autocomplete="off">
                         <div class="timezone-dropdown" id="editLanguageDropdown"></div>
                     </div>
+                    <label data-i18n="startupUrlsLabel"
+                        style="font-size:11px; font-weight:bold; opacity:0.8; margin-top:8px; display:block;">Startup URLs</label>
+                    <textarea id="editStartupUrls" rows="3" placeholder="https://example.com&#10;https://another.example"
+                        spellcheck="false" autocomplete="off"></textarea>
+                    <div style="font-size:10px; opacity:0.55; margin-top:4px;" data-i18n="startupUrlsHint">
+                        One URL per line. Open automatically after launch.
+                    </div>
+                    <div style="margin-top:12px;">
+                        <label data-i18n="savedProxyLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Saved Proxy</label>
+                        <select id="editSavedProxyId" onchange="handleSavedProfileProxyChange('edit')"></select>
+                        <div id="editSavedProxyInfo" style="font-size:10px; opacity:0.58; margin-top:4px;" data-i18n="proxySourceManualHint">
+                            Leave empty to use the manual proxy text below.
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+                        <div style="flex:1; min-width:220px;">
+                            <label data-i18n="headerPresetLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Header Preset</label>
+                            <select id="editHeaderPresetId"></select>
+                        </div>
+                        <div style="flex:1; min-width:220px;">
+                            <label data-i18n="geoPermissionLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Geo Permission</label>
+                            <select id="editGeoPermissionMode">
+                                <option value="auto" data-i18n="geoPermissionAuto">Auto</option>
+                                <option value="granted" data-i18n="geoPermissionGranted">Granted</option>
+                                <option value="prompt" data-i18n="geoPermissionPrompt">Prompt</option>
+                                <option value="denied" data-i18n="geoPermissionDenied">Denied</option>
+                            </select>
+                        </div>
+                        <div style="flex:1; min-width:220px;">
+                            <label data-i18n="cameraPermissionLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Camera Permission</label>
+                            <select id="editCameraPermissionMode">
+                                <option value="auto" data-i18n="geoPermissionAuto">Auto</option>
+                                <option value="granted" data-i18n="geoPermissionGranted">Granted</option>
+                                <option value="prompt" data-i18n="geoPermissionPrompt">Prompt</option>
+                                <option value="denied" data-i18n="geoPermissionDenied">Denied</option>
+                            </select>
+                        </div>
+                        <div style="flex:1; min-width:220px;">
+                            <label data-i18n="microphonePermissionLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Microphone Permission</label>
+                            <select id="editMicrophonePermissionMode">
+                                <option value="auto" data-i18n="geoPermissionAuto">Auto</option>
+                                <option value="granted" data-i18n="geoPermissionGranted">Granted</option>
+                                <option value="prompt" data-i18n="geoPermissionPrompt">Prompt</option>
+                                <option value="denied" data-i18n="geoPermissionDenied">Denied</option>
+                            </select>
+                        </div>
+                        <div style="flex:1; min-width:220px;">
+                            <label data-i18n="notificationPermissionLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Notification Permission</label>
+                            <select id="editNotificationPermissionMode">
+                                <option value="auto" data-i18n="geoPermissionAuto">Auto</option>
+                                <option value="granted" data-i18n="geoPermissionGranted">Granted</option>
+                                <option value="prompt" data-i18n="geoPermissionPrompt">Prompt</option>
+                                <option value="denied" data-i18n="geoPermissionDenied">Denied</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="margin-top:12px;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
+                            <label data-i18n="profileExtensionsLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Profile Extensions</label>
+                            <label style="display:flex; align-items:center; gap:6px; font-size:11px; opacity:0.8;">
+                                <input type="checkbox" id="editUseGlobalExtensions" checked>
+                                <span data-i18n="profileUseGlobalExtensions">Load shared extensions</span>
+                            </label>
+                        </div>
+                        <div id="editProfileExtensionList" style="display:flex; flex-direction:column; gap:8px;"></div>
+                        <div style="font-size:10px; opacity:0.55; margin-top:4px;" data-i18n="profileExtensionsHint">
+                            Select extensions from the shared library in Settings.
+                        </div>
+                    </div>
 
                     <label data-i18n="proxyLink" style="font-size:11px; font-weight:bold; opacity:0.8;">Proxy</label>
                     <textarea id="editProxy" rows="4"></textarea>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:8px 0 10px;">
+                        <button type="button" class="outline" onclick="testEditProxyConfig()" data-i18n="proxyTestBtn">Test Proxy</button>
+                        <span style="font-size:10px; opacity:0.58;" data-i18n="proxyTestHint">Test the current proxy before saving.</span>
+                    </div>
+                    <div id="editProxyTestResult" style="display:none; margin-bottom:12px; padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:rgba(255,255,255,0.02); font-size:12px; line-height:1.55;"></div>
                     <div>
                         <label data-i18n="preProxySetting"
                             style="font-size:11px; font-weight:bold; opacity:0.8;">Pre-Proxy</label>
@@ -1388,7 +2060,17 @@
                         <label style="font-size:11px; font-weight:bold; opacity:0.8;">Remote Debugging Port</label>
                         <input type="number" id="editDebugPort" placeholder="Leave empty for auto-assign (e.g., 9222)">
                         <div style="font-size:10px; color:#f39c12; margin-top:4px;">
-                            ⚠️ Enabling debugging port may increase detection risk
+                            ??? Enabling debugging port may increase detection risk
+                        </div>
+                    </div>
+                    <!-- Custom Launch Arguments (conditional) -->
+                    <div id="customArgsSection" style="display:none; margin-top:12px;">
+                        <label style="font-size:11px; font-weight:bold; opacity:0.8;" data-i18n="customArgsLabel">Custom
+                            Launch Arguments</label>
+                        <textarea id="editCustomArgs" rows="2" placeholder="--start-maximized --disable-images"
+                            spellcheck="false" style="font-family:monospace; font-size:11px;"></textarea>
+                        <div style="font-size:10px; opacity:0.6; margin-top:4px;" data-i18n="customArgsHint">
+                            One argument per line or space-separated. Example: --start-maximized
                         </div>
                     </div>
                 </div>
@@ -1634,18 +2316,36 @@
                         </div>
                     </div>
                 </div>
-                <!-- Custom Launch Arguments (conditional) -->
-                <div id="customArgsSection" style="display:none; margin-top:12px;">
-                    <label style="font-size:11px; font-weight:bold; opacity:0.8;" data-i18n="customArgsLabel">Custom
-                        Launch Arguments</label>
-                    <textarea id="editCustomArgs" rows="2" placeholder="--start-maximized --disable-images"
-                        spellcheck="false" style="font-family:monospace; font-size:11px;"></textarea>
-                    <div style="font-size:10px; opacity:0.6; margin-top:4px;" data-i18n="customArgsHint">
-                        One argument per line or space-separated. Example: --start-maximized
+                <div id="edit-tab-backup" class="edit-tab-section" style="display: none;">
+                    <div style="font-size:12px; opacity:0.75; line-height:1.6; margin-bottom:14px;" data-i18n="profileBackupMigrationHint">
+                        Manage backup and cookie transfer for the current profile only.
+                    </div>
+
+                    <div style="padding:12px; border:1px solid var(--border); border-radius:8px; margin-bottom:12px;">
+                        <div style="font-size:12px; font-weight:bold; opacity:0.85; margin-bottom:10px;" data-i18n="cookieImport">
+                            Import Cookies
+                        </div>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                            <button type="button" class="outline" onclick="importProfileCookies()" data-i18n="cookieImport">Import Cookies</button>
+                            <button type="button" class="outline" onclick="exportProfileCookies('json')" data-i18n="cookieExportJson">Export JSON</button>
+                            <button type="button" class="outline" onclick="exportProfileCookies('netscape')" data-i18n="cookieExportNetscape">Export Netscape</button>
+                        </div>
+                    </div>
+
+                    <div style="padding:12px; border:1px solid var(--border); border-radius:8px;">
+                        <div style="font-size:12px; font-weight:bold; opacity:0.85; margin-bottom:6px;" data-i18n="profileFullBackupCurrent">
+                            Full Backup Current Profile
+                        </div>
+                        <div style="font-size:10px; opacity:0.58; line-height:1.6; margin-bottom:10px;" data-i18n="profileFullBackupCurrentHint">
+                            Export the current profile with browser data using the existing encrypted full-backup flow.
+                        </div>
+                        <button type="button" onclick="exportCurrentProfileFullBackup()" data-i18n="profileFullBackupCurrent">
+                            Full Backup Current Profile
+                        </button>
                     </div>
                 </div>
             </div>
-            <div class="modal-footer"><button class="outline" onclick="closeEditModal()"
+            <div class="modal-footer" style="display:flex; justify-content:flex-end; gap:10px;"><button class="outline" onclick="closeEditModal()"
                     data-i18n="cancel">Cancel</button><button onclick="saveEditProfile()" data-i18n="save">Save</button>
             </div>
         </div>
@@ -1654,38 +2354,188 @@
     <!-- Other Modals (Keep same) -->
     <div id="proxyModal" class="modal-overlay">
         <div class="modal-content">
-            <div class="modal-header"><span data-i18n="manageChain">Manage Chain</span><span style="cursor:pointer"
-                    onclick="closeProxyManager()">✕</span></div>
-            <div
-                style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-shrink:0;">
-                <select id="proxyMode" style="width:180px; margin-bottom:0;"></select><label
-                    style="display:flex; align-items:center; gap:5px; font-size:12px; cursor:pointer;"><input
-                        type="checkbox" id="notifySwitch" style="width:auto; margin:0;"> <span
-                        data-i18n="notify">Notify</span></label>
-            </div>
-            <div class="tab-header" id="proxyGroupTabs"></div>
-            <div
-                style="display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.1); padding:5px 10px; border-radius:4px; margin-bottom:10px; flex-shrink:0;">
-                <div id="currentGroupTitle" style="font-weight:bold; font-size:13px; color:var(--accent);">Manual</div>
-                <div style="display:flex; gap:10px;"><button class="outline" onclick="testCurrentGroup()"
-                        data-i18n="btnTestGroup" style="font-size:11px;">⚡ Test All</button><button class="outline"
-                        id="btnEditSub" onclick="editCurrentSubscription()" style="font-size:11px; display:none;">✎ Edit
-                        Sub</button><button class="outline" onclick="openSubEditModal(true)" data-i18n="btnImportSub"
-                        style="font-size:11px;">+ New Sub</button></div>
-            </div>
-            <div id="preProxyList"></div>
-            <div id="manualAddArea">
-                <div style="display:flex; gap:5px;"><input type="hidden" id="editProxyId"><input type="text"
-                        id="newProxyRemark" placeholder="Remark" style="width:25%; margin-bottom:0;"
-                        spellcheck="false"><input type="text" id="newProxyUrl" placeholder="vmess://, ss://..."
-                        style="flex:1; margin-bottom:0;" spellcheck="false"><button onclick="savePreProxy()"
-                        data-i18n="add" id="btnSaveProxy" style="width:70px; margin-bottom:0;">Add</button></div>
-                <div style="font-size:11px; color:var(--text-secondary); margin-top:5px; text-align:right;"><span
-                        style="cursor:pointer; color:var(--accent);" onclick="resetProxyInput()">[Clear Input]</span>
+            <div class="modal-header"><span data-i18n="manageChain">Proxy Manager</span><span style="cursor:pointer"
+                    onclick="closeProxyManager()">&times;</span></div>
+            <div class="tab-header" style="flex-shrink:0; margin-bottom:10px;">
+                <div class="tab-btn active" id="proxyManagerChainTabBtn" onclick="switchProxyManagerTab('chain', this)"
+                    data-i18n="proxyManagerChainTab">Pre-Proxy Chain</div>
+                <div class="tab-btn" id="proxyManagerLibraryTabBtn" onclick="switchProxyManagerTab('library', this)"
+                    style="display:flex; align-items:center; gap:8px;">
+                    <span data-i18n="proxyManagerLibraryTab">Proxy Library</span>
+                    <span id="proxyManagerLibraryTabAlertBadge" class="inline-alert-badge" aria-hidden="true"></span>
                 </div>
             </div>
-            <div style="text-align:right; margin-top:10px; flex-shrink:0;"><button onclick="saveProxySettings()"
-                    data-i18n="done">Done</button></div>
+
+            <div id="proxyManagerTab-chain" style="display:flex; flex-direction:column; flex:1; min-height:0;">
+                <div
+                    style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-shrink:0;">
+                    <select id="proxyMode" style="width:180px; margin-bottom:0;"></select><label
+                        style="display:flex; align-items:center; gap:5px; font-size:12px; cursor:pointer;"><input
+                            type="checkbox" id="notifySwitch" style="width:auto; margin:0;"> <span
+                            data-i18n="notify">Notify</span></label>
+                </div>
+                <div class="tab-header" id="proxyGroupTabs"></div>
+                <div
+                    style="display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.1); padding:5px 10px; border-radius:4px; margin-bottom:10px; flex-shrink:0;">
+                    <div id="currentGroupTitle" style="font-weight:bold; font-size:13px; color:var(--accent);">Manual</div>
+                    <div style="display:flex; gap:10px;"><button class="outline" onclick="testCurrentGroup()"
+                            data-i18n="btnTestGroup" style="font-size:11px;">Test All</button><button class="outline"
+                            id="btnEditSub" onclick="editCurrentSubscription()" style="font-size:11px; display:none;">Edit
+                            Sub</button><button class="outline" onclick="openSubEditModal(true)" data-i18n="btnImportSub"
+                            style="font-size:11px;">+ New Sub</button></div>
+                </div>
+                <div id="preProxyList"></div>
+                <div id="manualAddArea">
+                    <div style="display:flex; gap:5px;"><input type="hidden" id="editProxyId"><input type="text"
+                            id="newProxyRemark" placeholder="Remark" style="width:25%; margin-bottom:0;"
+                            spellcheck="false"><input type="text" id="newProxyUrl" placeholder="vmess://, ss://..."
+                            style="flex:1; margin-bottom:0;" spellcheck="false"><button onclick="savePreProxy()"
+                            data-i18n="add" id="btnSaveProxy" style="width:70px; margin-bottom:0;">Add</button></div>
+                    <div style="font-size:11px; color:var(--text-secondary); margin-top:5px; text-align:right;"><span
+                            style="cursor:pointer; color:var(--accent);" onclick="resetProxyInput()">[Clear Input]</span>
+                    </div>
+                </div>
+                <div style="text-align:right; margin-top:10px; flex-shrink:0;"><button onclick="saveProxySettings()"
+                        data-i18n="done">Done</button></div>
+            </div>
+
+            <div id="proxyManagerTab-library" style="display:none; flex:1; min-height:0; overflow-y:auto; padding-right:4px;">
+                <div class="tab-header" style="flex-shrink:0; margin-bottom:10px;">
+                    <div class="tab-btn active" id="proxyLibraryProxyListTabBtn" onclick="switchProxyLibraryTab('proxies', this)">
+                        <span data-i18n="proxyLibraryProxyListTab">Proxy List</span>
+                    </div>
+                    <div class="tab-btn" id="proxyLibrarySourceTabBtn" onclick="switchProxyLibraryTab('sources', this)"
+                        style="display:flex; align-items:center; gap:8px;">
+                        <span data-i18n="proxyLibrarySourceTab">Source Subscriptions</span>
+                        <span id="savedProxySourcesAlertBadge" class="inline-alert-badge" aria-hidden="true"></span>
+                    </div>
+                </div>
+
+                <div id="proxyLibrarySubTab-proxies" style="display:block;">
+                    <div style="border:1px solid var(--border); border-radius:8px; padding:12px; background:rgba(0,0,0,0.16); display:flex; flex-direction:column; gap:12px;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:4px;">
+                            <strong style="color:var(--text-primary); font-size:13px;" data-i18n="proxyLibraryProxyListTab">Proxy List</strong>
+                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                <button class="outline" type="button" onclick="openSavedProfileProxyImport()" data-i18n="savedProxyImportBtn">Import</button>
+                                <button class="outline" type="button" onclick="addSavedProfileProxy()" data-i18n="addSavedProfileProxy">Add Proxy</button>
+                                <button class="outline" type="button" onclick="runVisibleSavedProfileProxyTests(this)" data-i18n="savedProxyRetestVisible">Check Visible</button>
+                                <button class="outline" type="button" onclick="resetSavedProfileProxiesEditor()" data-i18n="reset">Reset</button>
+                                <button type="button" onclick="saveSavedProfileProxiesEditor()" data-i18n="save">Save</button>
+                            </div>
+                        </div>
+                        <div style="font-size:11px; opacity:0.68; margin-bottom:4px;" data-i18n="savedProfileProxiesDesc">
+                            Maintain a reusable proxy library for profile bindings.
+                        </div>
+                        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:10px;">
+                            <label style="display:flex; flex-direction:column; gap:6px; font-size:11px; opacity:0.85;">
+                                <span data-i18n="savedProxyFilterSearchLabel">Search</span>
+                                <input type="text" id="savedProfileProxySearch" spellcheck="false" data-i18n-placeholder="savedProxyFilterSearchPlaceholder" placeholder="Search id / name / group / tag..." oninput="setSavedProfileProxyEditorSearch(this.value)">
+                            </label>
+                            <label style="display:flex; flex-direction:column; gap:6px; font-size:11px; opacity:0.85;">
+                                <span data-i18n="savedProxyFilterGroupLabel">Group</span>
+                                <select id="savedProfileProxyFilterGroup" onchange="setSavedProfileProxyEditorGroupFilter(this.value)">
+                                    <option value="" data-i18n="noneOption">None</option>
+                                </select>
+                            </label>
+                            <label style="display:flex; flex-direction:column; gap:6px; font-size:11px; opacity:0.85;">
+                                <span data-i18n="savedProxyFilterStatusLabel">Status</span>
+                                <select id="savedProfileProxyFilterStatus" onchange="setSavedProfileProxyEditorStatusFilter(this.value)">
+                                    <option value="all" data-i18n="savedProxyFilterStatusAll">All</option>
+                                    <option value="enabled" data-i18n="savedProxyFilterStatusEnabled">Enabled</option>
+                                    <option value="disabled" data-i18n="savedProxyFilterStatusDisabled">Disabled</option>
+                                    <option value="used" data-i18n="savedProxyFilterStatusUsed">Used</option>
+                                    <option value="unused" data-i18n="savedProxyFilterStatusUnused">Unused</option>
+                                    <option value="ok" data-i18n="proxyFilterOk">OK Only</option>
+                                    <option value="warn" data-i18n="proxyFilterWarn">Warn Only</option>
+                                    <option value="candidate" data-i18n="savedProxyFilterStatusCandidate">Needs Quarantine</option>
+                                    <option value="quarantined" data-i18n="savedProxyFilterStatusQuarantined">Quarantined</option>
+                                    <option value="untested" data-i18n="proxyFilterUntested">Untested</option>
+                                    <option value="stale" data-i18n="proxyFilterStale">Changed Proxy</option>
+                                </select>
+                            </label>
+                            <label style="display:flex; flex-direction:column; gap:6px; font-size:11px; opacity:0.85;">
+                                <span data-i18n="savedProxySortLabel">Sort</span>
+                                <select id="savedProfileProxySortMode" onchange="setSavedProfileProxyEditorSortMode(this.value)">
+                                    <option value="name-asc" data-i18n="savedProxySortName">Name</option>
+                                    <option value="group-asc" data-i18n="savedProxySortGroup">Group</option>
+                                    <option value="usage-desc" data-i18n="savedProxySortUsage">Usage</option>
+                                    <option value="checked-desc" data-i18n="savedProxySortChecked">Last Checked</option>
+                                    <option value="latency-asc" data-i18n="savedProxySortLatency">Latency</option>
+                                    <option value="status-desc" data-i18n="savedProxySortStatus">Status</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:2px;">
+                            <div style="display:flex; flex-direction:column; gap:4px;">
+                                <div id="savedProfileProxyFilterSummary" style="font-size:11px; opacity:0.68;">0/0</div>
+                                <div id="savedProfileProxySelectionSummary" style="font-size:11px; opacity:0.68;">0 selected</div>
+                            </div>
+                        </div>
+                        <div id="savedProfileProxySelectionHelpers" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:10px; border:1px dashed var(--border); border-radius:8px; background:rgba(255,255,255,0.02);">
+                            <span style="font-size:11px; opacity:0.72;" data-i18n="selectionHelperHint">快速选择</span>
+                            <button id="btnSelectVisibleSavedProfileProxies" class="outline" type="button" onclick="selectAllVisibleSavedProfileProxies()" data-i18n="selectVisibleProfiles">Select Visible</button>
+                            <button id="btnSelectStaleSavedProfileProxies" class="outline" type="button" onclick="selectVisibleStaleSavedProfileProxies()" data-i18n="savedProxySelectStaleBtn">Select Stale</button>
+                        </div>
+                        <div id="savedProfileProxySelectionToolbar" style="display:none; align-items:flex-start; gap:8px; flex-wrap:wrap; padding:10px; border:1px solid var(--border); border-radius:8px; background:rgba(255,255,255,0.03);">
+                            <span style="font-size:11px; font-weight:700; color:var(--accent); padding:8px 10px; border-radius:999px; background:rgba(0,224,255,0.08); border:1px solid rgba(0,224,255,0.18);" data-i18n="batchActionsTitle">批量操作</span>
+                            <button id="btnClearSelectedSavedProfileProxies" class="outline" type="button" onclick="clearSelectedSavedProfileProxies()" data-i18n="clearSelectedProfiles">Clear Selection</button>
+                            <button id="btnEnableSelectedSavedProfileProxies" class="outline" type="button" onclick="setEnabledForSelectedSavedProfileProxies(true, this)" data-i18n="savedProxyEnableSelectedBtn">Enable Selected</button>
+                            <button id="btnDisableSelectedSavedProfileProxies" class="outline" type="button" onclick="setEnabledForSelectedSavedProfileProxies(false, this)" data-i18n="savedProxyDisableSelectedBtn">Disable Selected</button>
+                            <button id="btnBatchSetSavedProxyGroup" class="outline" type="button" onclick="batchSetGroupForSelectedSavedProxies()" data-i18n="savedProxyBatchSetGroupBtn">Set Group</button>
+                            <details style="position:relative;">
+                                <summary style="list-style:none; cursor:pointer; padding:8px 12px; border:1px solid var(--border); border-radius:8px; font-size:12px; color:var(--text-primary); user-select:none;">
+                                    <span data-i18n="tagActionsBtn">Tag Actions</span>
+                                </summary>
+                                <div style="position:absolute; top:100%; left:0; z-index:20; display:flex; gap:8px; flex-wrap:wrap; padding:10px; margin-top:6px; min-width:260px; border:1px solid var(--border); border-radius:8px; background:var(--card-bg); box-shadow:0 6px 18px rgba(0,0,0,0.28);">
+                                    <button id="btnSetTagsSelectedSavedProfileProxies" class="outline" type="button" onclick="editTagsForSelectedSavedProfileProxies('set')" data-i18n="savedProxySetTagsSelectedBtn">Set Tags</button>
+                                    <button id="btnAddTagsSelectedSavedProfileProxies" class="outline" type="button" onclick="editTagsForSelectedSavedProfileProxies('add')" data-i18n="savedProxyAddTagsSelectedBtn">Add Tags</button>
+                                    <button id="btnRemoveTagsSelectedSavedProfileProxies" class="outline" type="button" onclick="editTagsForSelectedSavedProfileProxies('remove')" data-i18n="savedProxyRemoveTagsSelectedBtn">Remove Tags</button>
+                                </div>
+                            </details>
+                            <button id="btnExportSelectedSavedProfileProxies" class="outline" type="button" onclick="exportSelectedSavedProfileProxies(this)" data-i18n="savedProxyExportSelectedBtn">Export Selected</button>
+                            <details style="position:relative;">
+                                <summary style="list-style:none; cursor:pointer; padding:8px 12px; border:1px solid var(--border); border-radius:8px; font-size:12px; color:var(--text-primary); user-select:none;">
+                                    <span data-i18n="moreActionsBtn">More Actions</span>
+                                </summary>
+                                <div style="position:absolute; top:100%; left:0; z-index:20; display:flex; gap:8px; flex-wrap:wrap; padding:10px; margin-top:6px; min-width:320px; border:1px solid var(--border); border-radius:8px; background:var(--card-bg); box-shadow:0 6px 18px rgba(0,0,0,0.28);">
+                                    <select id="savedProfileProxyExportFormat" class="list-filter-select">
+                                        <option value="txt" data-i18n="savedProxyExportFormatTxt">TXT</option>
+                                        <option value="json" data-i18n="savedProxyExportFormatJson">JSON</option>
+                                    </select>
+                                    <button class="outline" type="button" onclick="exportVisibleSavedProfileProxies(this)" data-i18n="savedProxyExportVisibleBtn">Export Visible</button>
+                                    <button id="btnRetestSelectedSavedProfileProxies" class="outline" type="button" onclick="runSelectedSavedProfileProxyTests(this)" data-i18n="savedProxyRetestSelectedBtn">Retest Selected</button>
+                                    <button id="btnRotateSelectedSavedProfileProxies" class="outline" type="button" onclick="rotateSelectedSavedProfileProxies(this)" data-i18n="savedProxyRotateSelectedBtn">Rotate Selected</button>
+                                    <button id="btnDisableVisibleStaleSavedProfileProxies" class="outline" type="button" onclick="disableVisibleStaleSavedProfileProxies(this)" data-i18n="savedProxyDisableVisibleStaleBtn">Disable Visible Stale</button>
+                                    <button id="btnDetachSourceSelectedSavedProfileProxies" class="outline" type="button" onclick="detachSourceForSelectedSavedProfileProxies(this)" data-i18n="savedProxyDetachSourceSelectedBtn">Detach Source</button>
+                                    <button id="btnDeleteSelectedSavedProfileProxies" class="danger outline" type="button" onclick="deleteSelectedSavedProfileProxies(this)" data-i18n="savedProxyDeleteSelectedBtn">Delete Selected</button>
+                                </div>
+                            </details>
+                        </div>
+                        <div id="savedProfileProxyEditorList" style="display:flex; flex-direction:column; gap:12px;"></div>
+                    </div>
+                </div>
+
+                <div id="proxyLibrarySubTab-sources" style="display:none;">
+                    <div style="border:1px solid var(--border); border-radius:8px; padding:12px; background:rgba(0,0,0,0.16); display:flex; flex-direction:column; gap:12px;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:4px;">
+                            <strong style="color:var(--text-primary); font-size:13px;" data-i18n="proxyLibrarySourceTab">Source Subscriptions</strong>
+                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                <button class="outline" type="button" onclick="refreshEnabledSavedProfileProxySources(this)" data-i18n="savedProxySourceRefreshEnabledBtn">Refresh Enabled</button>
+                                <button class="outline" type="button" onclick="addSavedProfileProxySource()" data-i18n="addSavedProfileProxySource">Add Source</button>
+                                <button class="outline" type="button" onclick="resetSavedProfileProxySourcesEditor()" data-i18n="reset">Reset</button>
+                                <button type="button" onclick="saveSavedProfileProxySourcesEditor()" data-i18n="save">Save</button>
+                            </div>
+                        </div>
+                        <div style="font-size:11px; opacity:0.68; margin-bottom:4px;" data-i18n="savedProfileProxySourcesDesc">
+                            Store reusable remote proxy subscriptions and refresh them into the saved proxy library.
+                        </div>
+                        <div style="font-size:11px; opacity:0.55; margin-bottom:6px;" data-i18n="savedProfileProxySourcesHint">
+                            Refresh only updates the current draft. Save this section and the proxy library below to persist changes.
+                        </div>
+                        <div id="savedProfileProxySourceEditorList" style="display:flex; flex-direction:column; gap:12px;"></div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
     <div id="exportModal" class="modal-overlay" style="z-index: 2200;">
@@ -1821,6 +2671,131 @@
                 onclick="document.getElementById('alertModal').style.display='none'">OK</button>
         </div>
     </div>
+    <div id="batchSavedProxyBindModal" class="modal-overlay" style="z-index: 2002;">
+        <div class="modal-content" style="width: 520px; max-width: 92vw;">
+            <div class="modal-header">
+                <span data-i18n="batchBindSavedProxyTitle">Bind Saved Proxy</span>
+                <span style="cursor:pointer" onclick="closeBatchSavedProxyBindModal()">✕</span>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:12px; opacity:0.72; margin:0 0 12px;" data-i18n="batchBindSavedProxyDesc">
+                    Apply one saved proxy to the currently selected visible profiles.
+                </p>
+                <div style="font-size:12px; margin-bottom:10px;">
+                    <span data-i18n="batchBindSavedProxySelectionLabel">Selected</span>:
+                    <strong id="batchSavedProxyBindSummary">0 profiles</strong>
+                </div>
+                <label data-i18n="savedProxyLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Saved Proxy</label>
+                <select id="batchSavedProxyId" onchange="syncBatchSavedProxyBindInfo()"></select>
+                <div id="batchSavedProxyBindInfo" style="font-size:10px; opacity:0.6; margin-top:4px;" data-i18n="batchBindSavedProxyNoLibrary">
+                    No saved proxies available.
+                </div>
+            </div>
+            <div class="modal-footer" style="justify-content:flex-end; gap:8px;">
+                <button type="button" class="outline" onclick="closeBatchSavedProxyBindModal()" data-i18n="cancel">Cancel</button>
+                <button type="button" id="batchSavedProxyBindApplyBtn" onclick="applyBatchSavedProxyBinding(this)" data-i18n="batchBindSavedProxyApply">Apply Binding</button>
+            </div>
+        </div>
+    </div>
+    <div id="batchSavedProxyReplaceModal" class="modal-overlay" style="z-index: 2002;">
+        <div class="modal-content" style="width: 560px; max-width: 92vw;">
+            <div class="modal-header">
+                <span data-i18n="batchReplaceSavedProxyTitle">Replace Saved Proxy</span>
+                <span style="cursor:pointer" onclick="closeBatchReplaceSavedProxyModal()">✕</span>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:12px; opacity:0.72; margin:0 0 12px;" data-i18n="batchReplaceSavedProxyDesc">
+                    Replace one saved proxy binding with another inside the currently selected visible profiles.
+                </p>
+                <div style="font-size:12px; margin-bottom:10px;">
+                    <span data-i18n="batchBindSavedProxySelectionLabel">Selected</span>:
+                    <strong id="batchSavedProxyReplaceSummary">0 profiles</strong>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div>
+                        <label data-i18n="batchReplaceSavedProxySourceLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Current Saved Proxy</label>
+                        <select id="batchReplaceSavedProxyFromId" onchange="syncBatchReplaceSavedProxyInfo()"></select>
+                    </div>
+                    <div>
+                        <label data-i18n="batchReplaceSavedProxyTargetLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Replace With</label>
+                        <select id="batchReplaceSavedProxyToId" onchange="syncBatchReplaceSavedProxyInfo()"></select>
+                    </div>
+                </div>
+                <div id="batchSavedProxyReplaceInfo" style="font-size:10px; opacity:0.6; margin-top:8px;" data-i18n="batchBindSavedProxyNoLibrary">
+                    No saved proxies available.
+                </div>
+            </div>
+            <div class="modal-footer" style="justify-content:flex-end; gap:8px;">
+                <button type="button" class="outline" onclick="closeBatchReplaceSavedProxyModal()" data-i18n="cancel">Cancel</button>
+                <button type="button" id="batchSavedProxyReplaceApplyBtn" onclick="applyBatchReplaceSavedProxy(this)" data-i18n="batchReplaceSavedProxyApply">Apply Replace</button>
+            </div>
+        </div>
+    </div>
+    <div id="batchSavedProxyRandomModal" class="modal-overlay" style="z-index: 2002;">
+        <div class="modal-content" style="width: 560px; max-width: 92vw;">
+            <div class="modal-header">
+                <span data-i18n="batchRandomSavedProxyTitle">Random Saved Proxy</span>
+                <span style="cursor:pointer" onclick="closeBatchRandomSavedProxyModal()">✕</span>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:12px; opacity:0.72; margin:0 0 12px;" data-i18n="batchRandomSavedProxyDesc">
+                    Assign saved proxies randomly to the currently selected visible profiles. You can optionally limit the pool by tag or group.
+                </p>
+                <div style="font-size:12px; margin-bottom:10px;">
+                    <span data-i18n="batchBindSavedProxySelectionLabel">Selected</span>:
+                    <strong id="batchSavedProxyRandomSummary">0 profiles</strong>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div>
+                        <label data-i18n="batchRandomSavedProxyTagLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Tag Filter</label>
+                        <input type="text" id="batchRandomSavedProxyTag" placeholder="us, tiktok..." spellcheck="false" autocomplete="off" oninput="syncBatchRandomSavedProxyInfo()">
+                        <div style="font-size:10px; opacity:0.58; margin-top:4px;" data-i18n="batchRandomSavedProxyTagHint">
+                            Leave empty to use the full saved proxy library.
+                        </div>
+                    </div>
+                    <div>
+                        <label data-i18n="batchRandomSavedProxyGroupLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Group Filter</label>
+                        <select id="batchRandomSavedProxyGroup" onchange="syncBatchRandomSavedProxyInfo()">
+                            <option value="" data-i18n="noneOption">None</option>
+                        </select>
+                        <div style="font-size:10px; opacity:0.58; margin-top:4px;" data-i18n="batchRandomSavedProxyGroupHint">
+                            Leave empty to ignore group matching.
+                        </div>
+                    </div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr; gap:12px; margin-top:12px;">
+                    <div>
+                        <label data-i18n="batchRandomSavedProxyStrategyLabel" style="font-size:11px; font-weight:bold; opacity:0.8;">Strategy</label>
+                        <select id="batchRandomSavedProxyStrategy" onchange="syncBatchRandomSavedProxyInfo()">
+                            <option value="random" data-i18n="batchRandomSavedProxyStrategyRandom">Random Shuffle</option>
+                            <option value="least-used" data-i18n="batchRandomSavedProxyStrategyLeastUsed">Least Used First</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="batchSavedProxyRandomInfo" style="font-size:10px; opacity:0.6; margin-top:8px;" data-i18n="batchBindSavedProxyNoLibrary">
+                    No saved proxies available.
+                </div>
+            </div>
+            <div class="modal-footer" style="justify-content:flex-end; gap:8px;">
+                <button type="button" class="outline" onclick="closeBatchRandomSavedProxyModal()" data-i18n="cancel">Cancel</button>
+                <button type="button" id="batchSavedProxyRandomApplyBtn" onclick="applyBatchRandomSavedProxy(this)" data-i18n="batchRandomSavedProxyApply">Apply Random Assign</button>
+            </div>
+        </div>
+    </div>
+    <div id="diagnosticDetailModal" class="modal-overlay" style="z-index: 2003;">
+        <div class="modal-content" style="width: 860px; max-width: 94vw;">
+            <div class="modal-header">
+                <span id="diagnosticDetailTitle">Diagnostic Details</span>
+                <span style="cursor:pointer" onclick="closeDiagnosticDetailsModal()">✕</span>
+            </div>
+            <div class="modal-body" style="max-height: 72vh; overflow-y: auto;">
+                <div id="diagnosticDetailContent"></div>
+            </div>
+            <div class="modal-footer" style="justify-content: flex-end;">
+                <button class="outline" type="button" onclick="closeDiagnosticDetailsModal()">Close</button>
+            </div>
+        </div>
+    </div>
     <!-- Settings Modal -->
     <div id="settingsModal" class="modal-overlay">
         <div class="modal-content">
@@ -1830,9 +2805,10 @@
             </div>
 
             <div class="tab-header">
-                <div class="tab-btn active" onclick="switchSettingsTab('extensions')" data-i18n="settingsTabExtensions">
+                <div class="tab-btn active" onclick="switchSettingsTab('extensions', this)" data-i18n="settingsTabExtensions">
                     Extensions</div>
-                <div class="tab-btn" onclick="switchSettingsTab('advanced')" data-i18n="settingsTabAdvanced"> Advanced
+                <div class="tab-btn" onclick="switchSettingsTab('advanced', this)">
+                    <span data-i18n="settingsTabAdvanced">Advanced</span>
                 </div>
             </div>
 
@@ -2043,6 +3019,39 @@
                         </div>
                     </div>
 
+                    <div style="margin-bottom: 25px;">
+                        <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+                            <h4 style="margin:0; color:var(--text-primary); font-size:14px;" data-i18n="runtimeRulesTitle">Runtime Rules</h4>
+                        </div>
+                        <p style="font-size:12px; opacity:0.7; margin-bottom:12px;" data-i18n="runtimeRulesDesc">
+                            Maintain Header Presets and Detection Presets here.
+                        </p>
+                        <div style="display:flex; flex-direction:column; gap:14px;">
+                            <div style="border:1px solid var(--border); border-radius:8px; padding:12px; background:rgba(0,0,0,0.16);">
+                                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px;">
+                                    <strong style="color:var(--text-primary); font-size:13px;" data-i18n="headerPresetsTitle">Header Presets</strong>
+                                    <div style="display:flex; gap:8px;">
+                                        <button class="outline" type="button" onclick="addHeaderPreset()" data-i18n="addHeaderPreset">Add Header Preset</button>
+                                        <button class="outline" type="button" onclick="resetHeaderPresetsEditor()" data-i18n="reset">Reset</button>
+                                        <button type="button" onclick="saveHeaderPresetsEditor()" data-i18n="save">Save</button>
+                                    </div>
+                                </div>
+                                <div id="headerPresetEditorList" style="display:flex; flex-direction:column; gap:12px;"></div>
+                            </div>
+                            <div style="border:1px solid var(--border); border-radius:8px; padding:12px; background:rgba(0,0,0,0.16);">
+                                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px;">
+                                    <strong style="color:var(--text-primary); font-size:13px;" data-i18n="diagnosticPresetsTitle">Diagnostic Presets</strong>
+                                    <div style="display:flex; gap:8px;">
+                                        <button class="outline" type="button" onclick="addDiagnosticPreset()" data-i18n="addDiagnosticPreset">Add Diagnostic Preset</button>
+                                        <button class="outline" type="button" onclick="resetDiagnosticPresetsEditor()" data-i18n="reset">Reset</button>
+                                        <button type="button" onclick="saveDiagnosticPresetsEditor()" data-i18n="save">Save</button>
+                                    </div>
+                                </div>
+                                <div id="diagnosticPresetEditorList" style="display:flex; flex-direction:column; gap:12px;"></div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Watermark Style Section -->
                     <div style="margin-bottom: 25px;">
                         <h4 style="margin-bottom:10px; color:var(--text-primary); font-size:14px;"
@@ -2163,6 +3172,69 @@
                 spellcheck="false"></textarea>
             <div style="text-align:right; margin-top:10px;"><button onclick="submitInputModal()"
                     data-i18n="done">OK</button></div>
+        </div>
+    </div>
+
+    <div id="savedProxyImportModal" class="modal-overlay" style="z-index: 2105;">
+        <div class="modal-content" style="max-width:760px;">
+            <div class="modal-header">
+                <span data-i18n="savedProxyImportTitle">Import Saved Proxies</span>
+                <span style="cursor:pointer" onclick="closeSavedProfileProxyImport()">✕</span>
+            </div>
+            <div class="modal-body" style="display:flex; flex-direction:column; gap:12px;">
+                <div style="font-size:12px; color:var(--text-secondary);" data-i18n="savedProxyImportHint">
+                    Paste one proxy per line. Existing duplicates will be skipped.
+                </div>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px;">
+                    <label style="display:flex; flex-direction:column; gap:6px; font-size:12px;">
+                        <span data-i18n="savedProxyImportPrefixLabel">Name Prefix</span>
+                        <input id="savedProxyImportPrefix" type="text" spellcheck="false" data-i18n-placeholder="savedProxyImportPrefixPlaceholder" placeholder="Warmup US">
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; font-size:12px;">
+                        <span data-i18n="savedProxyImportStartIndexLabel">Start Index</span>
+                        <input id="savedProxyImportStartIndex" type="number" min="1" step="1" value="1">
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; font-size:12px;">
+                        <span data-i18n="savedProxyImportFormatLabel">Format</span>
+                        <select id="savedProxyImportFormat">
+                            <option value="auto" data-i18n="savedProxyImportFormatAuto">Auto Detect</option>
+                            <option value="lines" data-i18n="savedProxyImportFormatLines">Lines / TXT</option>
+                            <option value="csv" data-i18n="savedProxyImportFormatCsv">CSV / TSV</option>
+                            <option value="json" data-i18n="savedProxyImportFormatJson">JSON</option>
+                        </select>
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; font-size:12px;">
+                        <span data-i18n="savedProxyImportGroupLabel">Group</span>
+                        <input id="savedProxyImportGroup" type="text" spellcheck="false" data-i18n-placeholder="savedProxyImportGroupPlaceholder" placeholder="US / Team A">
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; font-size:12px;">
+                        <span data-i18n="savedProxyImportTagsLabel">Tags</span>
+                        <input id="savedProxyImportTags" type="text" spellcheck="false" data-i18n-placeholder="savedProxyImportTagsPlaceholder" placeholder="us, warmup, residential">
+                    </label>
+                </div>
+                <div style="display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:10px; align-items:end;">
+                    <label style="display:flex; flex-direction:column; gap:6px; font-size:12px;">
+                        <span data-i18n="savedProxyImportRemoteUrlLabel">Remote URL</span>
+                        <input id="savedProxyImportRemoteUrl" type="text" spellcheck="false" data-i18n-placeholder="savedProxyImportRemoteUrlPlaceholder" placeholder="https://example.com/proxies.txt">
+                    </label>
+                    <button type="button" class="outline" onclick="loadSavedProfileProxyImportRemote()" data-i18n="savedProxyImportLoadRemote">Load URL</button>
+                </div>
+                <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                    <button type="button" class="outline" onclick="triggerSavedProfileProxyImportFile()" data-i18n="savedProxyImportLoadFile">Load File</button>
+                    <span id="savedProxyImportFileInfo" style="font-size:12px; color:var(--text-secondary);" data-i18n="savedProxyImportFileHint">You can paste text or load a txt/csv/json file.</span>
+                    <input id="savedProxyImportFile" type="file" accept=".txt,.csv,.tsv,.json,text/plain,text/csv,application/json" style="display:none" onchange="handleSavedProfileProxyImportFile(this)">
+                </div>
+                <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-secondary);">
+                    <input id="savedProxyImportAutoCheck" type="checkbox">
+                    <span data-i18n="savedProxyImportAutoCheckLabel">Auto-check imported proxies after import</span>
+                </label>
+                <textarea id="savedProxyImportValue" rows="12" spellcheck="false" data-i18n-placeholder="savedProxyImportPlaceholder"
+                    placeholder="One proxy per line&#10;socks5://user:pass@host:port&#10;http://host:port:user:pass"></textarea>
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:12px;">
+                <button type="button" class="outline" onclick="closeSavedProfileProxyImport()" data-i18n="cancel">Cancel</button>
+                <button type="button" onclick="submitSavedProfileProxyImport()" data-i18n="savedProxyImportConfirm">Import</button>
+            </div>
         </div>
     </div>
 

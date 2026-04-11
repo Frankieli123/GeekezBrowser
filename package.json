@@ -1,11 +1,11 @@
 {
   "name": "geekez-browser",
-  "version": "1.4.3",
+  "version": "1.5.0",
   "description": "Stealthy Anti-Detect Browser for E-Commerce",
   "main": "main.js",
   "author": "EchoHS",
   "scripts": {
-    "start": "electron .",
+    "start": "node scripts/start-electron.js",
     "postinstall": "node setup.js",
     "build:win": "electron-builder --win",
     "build:mac": "electron-builder --mac",
