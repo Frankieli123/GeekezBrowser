@@ -68,6 +68,9 @@ jobs:
       
       - run: npm ci --ignore-scripts
 
+      - name: Verify entry local modules
+        run: npm run verify:entry-modules
+
       - name: Get Xray version
         id: xray
         shell: bash

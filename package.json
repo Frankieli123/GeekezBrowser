@@ -7,9 +7,10 @@
   "scripts": {
     "start": "node scripts/start-electron.js",
     "postinstall": "node setup.js",
-    "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac",
-    "build:linux": "electron-builder --linux"
+    "verify:entry-modules": "node scripts/verify-entry-local-modules.js",
+    "build:win": "npm run verify:entry-modules && electron-builder --win",
+    "build:mac": "npm run verify:entry-modules && electron-builder --mac",
+    "build:linux": "npm run verify:entry-modules && electron-builder --linux"
   },
   "build": {
     "appId": "com.geekez.browser",

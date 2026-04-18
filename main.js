@@ -13,7 +13,45 @@ const os = require('os');
 const net = require('net');
 const crypto = require('crypto');
 const AdmZip = require('adm-zip');
-const logger = require('./logger');
+
+function createInlineLogger() {
+    let logFile = null;
+    try {
+        const logDir = path.join(app.getPath('userData'), 'logs');
+        fs.ensureDirSync(logDir);
+        logFile = path.join(logDir, `app-${new Date().toISOString().split('T')[0]}.log`);
+    } catch (e) {}
+
+    const writeLog = (level, message, meta = {}) => {
+        const metaStr = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : '';
+        const line = `[${new Date().toISOString()}] [${level}] ${message}${metaStr}\n`;
+        console.log(line.trim());
+        if (!logFile) return;
+        try {
+            fs.appendFileSync(logFile, line);
+        } catch (e) {}
+    };
+
+    return {
+        error: (message, meta) => writeLog('ERROR', message, meta),
+        warn: (message, meta) => writeLog('WARN', message, meta),
+        info: (message, meta) => writeLog('INFO', message, meta)
+    };
+}
+
+function loadLogger() {
+    try {
+        return require('./logger');
+    } catch (error) {
+        const fallbackLogger = createInlineLogger();
+        fallbackLogger.warn('Failed to load ./logger, falling back to inline logger', {
+            error: error.message
+        });
+        return fallbackLogger;
+    }
+}
+
+const logger = loadLogger();
 
 const shouldDisableHardwareAcceleration =
     process.env.GEEKEZ_DISABLE_HW_ACCEL === '1' ||
