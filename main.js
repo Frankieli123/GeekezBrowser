@@ -7003,6 +7003,29 @@ function plinkSupportsLegacyStdioPrompts(plinkPath) {
     return supported;
 }
 
+function createUnixSshAskpassFiles(profileDir, password) {
+    const suffix = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const pwFile = path.join(profileDir, `ssh_pw_${suffix}.txt`);
+    const askpassPath = path.join(profileDir, `ssh_askpass_${suffix}.sh`);
+
+    fs.writeFileSync(pwFile, password, { encoding: 'utf8', mode: 0o600 });
+    fs.writeFileSync(askpassPath, '#!/bin/sh\ncat "$GEEKEZ_SSH_PASSWORD_FILE"\n', { encoding: 'utf8', mode: 0o700 });
+    try { fs.chmodSync(pwFile, 0o600); } catch (e) { }
+    try { fs.chmodSync(askpassPath, 0o700); } catch (e) { }
+
+    let cleaned = false;
+    return {
+        pwFile,
+        askpassPath,
+        cleanup: () => {
+            if (cleaned) return;
+            cleaned = true;
+            try { fs.unlinkSync(pwFile); } catch (e) { }
+            try { fs.unlinkSync(askpassPath); } catch (e) { }
+        }
+    };
+}
+
 async function startSshDynamicProxy(proxyStr, profileDir, options = {}) {
     const cfg = parseSshProxy(proxyStr);
     const preferredLocalPort = Number.parseInt(options.preferredLocalPort, 10);
@@ -7031,128 +7054,126 @@ async function startSshDynamicProxy(proxyStr, profileDir, options = {}) {
     const tryUnlink = (p) => { try { fs.unlinkSync(p); return true; } catch (e) { return false; } };
 
     if (cfg.password) {
-        if (process.platform !== 'win32') {
-            try { fs.closeSync(logFd); } catch (e) { }
-            throw new Error('SSH password auth is only supported on Windows with plink.exe; use ssh key/agent instead.');
-        }
-        const plinkPath = findPlinkPath();
-        if (!plinkPath) {
-            try { fs.closeSync(logFd); } catch (e) { }
-            throw new Error('plink.exe not found; install PuTTY, use a build with bundled plink, or set GEEKEZ_PLINK_PATH');
-        }
-
-        const pwFile = path.join(profileDir, `ssh_pw_${Date.now()}_${Math.random().toString(16).slice(2)}.txt`);
-        try {
-            fs.writeFileSync(pwFile, cfg.password, { encoding: 'utf8', mode: 0o600 });
-        } catch (e) {
-            try { fs.closeSync(logFd); } catch (e2) { }
-            throw new Error(`Failed to write SSH password file: ${e.message}`);
-        }
-
-        const args = [
-            '-ssh',
-            '-no-antispoof',
-            '-N',
-            '-D', `127.0.0.1:${localPort}`,
-            '-P', String(cfg.port),
-            '-pwfile', pwFile,
-        ];
-        // PuTTY/plink 0.82+ writes interactive security prompts to the Windows console (WriteConsole),
-        // which becomes invisible/non-capturable in GUI apps. Force legacy stdio prompts so we can
-        // surface a visible confirmation dialog and answer via stdin.
-        if (!cfg.hostKey && plinkSupportsLegacyStdioPrompts(plinkPath)) {
-            args.unshift('-legacy-stdio-prompts');
-        }
-        if (cfg.verbose || String(process.env.GEEKEZ_SSH_VERBOSE || '') === '1') args.push('-v');
-        if (cfg.hostKey) {
-            args.push('-hostkey', cfg.hostKey, '-batch');
-        }
-        if (cfg.username) args.push('-l', cfg.username);
-        args.push(cfg.host);
-
-        const proc = spawn(plinkPath, args, { cwd: profileDir, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
-        let spawnErr = null;
-        proc.once('error', (e) => { spawnErr = e; });
-
-        let cancelled = false;
-        const hostPortKey = `${cfg.host}:${cfg.port}`;
-        let hostKeyFingerprint = '';
-        let promptTask = null;
-        let textBuf = '';
-
-        const writeLog = (buf) => { try { fs.writeSync(logFd, buf); } catch (e) { } };
-
-        const maybeHandlePrompt = async () => {
-            if (promptTask || cfg.hostKey) return;
-            const isUpdate = textBuf.includes('Update cached key?');
-            if (!textBuf.includes('Store key in cache?') && !isUpdate) return;
-            promptTask = (async () => {
-                if (!isUpdate && trustedSshHosts.has(hostPortKey)) {
-                    try { proc.stdin.write('y\n'); } catch (e) { }
-                    return;
-                }
-
-                // Optional auto policy to avoid any prompt (similar to many commercial tools).
-                // accept-new: auto trust only when key is missing (Store key...).
-                // accept-all: auto trust even when cached key mismatch (Update cached key...) (unsafe).
-                if (cfg.hostKeyPolicy === 'accept-all' || (!isUpdate && cfg.hostKeyPolicy === 'accept-new')) {
-                    if (!isUpdate) trustedSshHosts.add(hostPortKey);
-                    try { proc.stdin.write('y\n'); } catch (e) { }
-                    return;
-                }
-
-                const choice = await promptSshHostKeyDecision({
-                    host: cfg.host,
-                    port: cfg.port,
-                    fingerprint: hostKeyFingerprint,
-                    isUpdate,
-                    raw: textBuf.slice(-2000),
-                });
-                if (choice === 'y' || choice === 'n') {
-                    if (!isUpdate && choice === 'y') trustedSshHosts.add(hostPortKey);
-                    try { proc.stdin.write(`${choice}\n`); } catch (e) { }
-                    return;
-                }
-
-                cancelled = true;
-                await forceKill(proc.pid);
-            })();
-        };
-
-        const onText = (t) => {
-            textBuf += t;
-            const m = textBuf.match(/(?:The server's|The new)\s+[^\r\n]+ key fingerprint is:\s*\r?\n\s*([^\r\n]+)\r?\n/i);
-            if (m && m[1]) hostKeyFingerprint = String(m[1]).trim();
-            void maybeHandlePrompt();
-        };
-
-        if (proc.stdout) proc.stdout.on('data', (d) => { writeLog(d); onText(String(d)); });
-        if (proc.stderr) proc.stderr.on('data', (d) => { writeLog(d); onText(String(d)); });
-
-        const ready = await waitForTcpPort('127.0.0.1', localPort, 60000, () => cancelled || proc.exitCode !== null);
-        if (promptTask) await promptTask.catch(() => { });
-        if (spawnErr) {
-            tryUnlink(pwFile);
-            try { fs.closeSync(logFd); } catch (e) { }
-            throw new Error(`SSH spawn failed: ${spawnErr.message || String(spawnErr)}`);
-        }
-        if (cancelled) {
-            tryUnlink(pwFile);
-            try { fs.closeSync(logFd); } catch (e) { }
-            throw new Error('SSH host key not trusted');
-        }
-        if (!ready || proc.exitCode !== null) {
-            await forceKill(proc.pid);
-            // plink may keep the pwfile handle open until exit; retry deletion briefly after kill
-            for (let i = 0; i < 20; i++) {
-                if (tryUnlink(pwFile)) break;
-                await _sleep(100);
+        if (process.platform === 'win32') {
+            const plinkPath = findPlinkPath();
+            if (!plinkPath) {
+                try { fs.closeSync(logFd); } catch (e) { }
+                throw new Error('plink.exe not found; install PuTTY, use a build with bundled plink, or set GEEKEZ_PLINK_PATH');
             }
-            try { fs.closeSync(logFd); } catch (e) { }
-            throw new Error(`SSH tunnel not ready (check ${logPath})`);
+
+            const pwFile = path.join(profileDir, `ssh_pw_${Date.now()}_${Math.random().toString(16).slice(2)}.txt`);
+            try {
+                fs.writeFileSync(pwFile, cfg.password, { encoding: 'utf8', mode: 0o600 });
+            } catch (e) {
+                try { fs.closeSync(logFd); } catch (e2) { }
+                throw new Error(`Failed to write SSH password file: ${e.message}`);
+            }
+
+            const args = [
+                '-ssh',
+                '-no-antispoof',
+                '-N',
+                '-D', `127.0.0.1:${localPort}`,
+                '-P', String(cfg.port),
+                '-pwfile', pwFile,
+            ];
+            // PuTTY/plink 0.82+ writes interactive security prompts to the Windows console (WriteConsole),
+            // which becomes invisible/non-capturable in GUI apps. Force legacy stdio prompts so we can
+            // surface a visible confirmation dialog and answer via stdin.
+            if (!cfg.hostKey && plinkSupportsLegacyStdioPrompts(plinkPath)) {
+                args.unshift('-legacy-stdio-prompts');
+            }
+            if (cfg.verbose || String(process.env.GEEKEZ_SSH_VERBOSE || '') === '1') args.push('-v');
+            if (cfg.hostKey) {
+                args.push('-hostkey', cfg.hostKey, '-batch');
+            }
+            if (cfg.username) args.push('-l', cfg.username);
+            args.push(cfg.host);
+
+            const proc = spawn(plinkPath, args, { cwd: profileDir, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+            let spawnErr = null;
+            proc.once('error', (e) => { spawnErr = e; });
+
+            let cancelled = false;
+            const hostPortKey = `${cfg.host}:${cfg.port}`;
+            let hostKeyFingerprint = '';
+            let promptTask = null;
+            let textBuf = '';
+
+            const writeLog = (buf) => { try { fs.writeSync(logFd, buf); } catch (e) { } };
+
+            const maybeHandlePrompt = async () => {
+                if (promptTask || cfg.hostKey) return;
+                const isUpdate = textBuf.includes('Update cached key?');
+                if (!textBuf.includes('Store key in cache?') && !isUpdate) return;
+                promptTask = (async () => {
+                    if (!isUpdate && trustedSshHosts.has(hostPortKey)) {
+                        try { proc.stdin.write('y\n'); } catch (e) { }
+                        return;
+                    }
+
+                    // Optional auto policy to avoid any prompt (similar to many commercial tools).
+                    // accept-new: auto trust only when key is missing (Store key...).
+                    // accept-all: auto trust even when cached key mismatch (Update cached key...) (unsafe).
+                    if (cfg.hostKeyPolicy === 'accept-all' || (!isUpdate && cfg.hostKeyPolicy === 'accept-new')) {
+                        if (!isUpdate) trustedSshHosts.add(hostPortKey);
+                        try { proc.stdin.write('y\n'); } catch (e) { }
+                        return;
+                    }
+
+                    const choice = await promptSshHostKeyDecision({
+                        host: cfg.host,
+                        port: cfg.port,
+                        fingerprint: hostKeyFingerprint,
+                        isUpdate,
+                        raw: textBuf.slice(-2000),
+                    });
+                    if (choice === 'y' || choice === 'n') {
+                        if (!isUpdate && choice === 'y') trustedSshHosts.add(hostPortKey);
+                        try { proc.stdin.write(`${choice}\n`); } catch (e) { }
+                        return;
+                    }
+
+                    cancelled = true;
+                    await forceKill(proc.pid);
+                })();
+            };
+
+            const onText = (t) => {
+                textBuf += t;
+                const m = textBuf.match(/(?:The server's|The new)\s+[^\r\n]+ key fingerprint is:\s*\r?\n\s*([^\r\n]+)\r?\n/i);
+                if (m && m[1]) hostKeyFingerprint = String(m[1]).trim();
+                void maybeHandlePrompt();
+            };
+
+            if (proc.stdout) proc.stdout.on('data', (d) => { writeLog(d); onText(String(d)); });
+            if (proc.stderr) proc.stderr.on('data', (d) => { writeLog(d); onText(String(d)); });
+
+            const ready = await waitForTcpPort('127.0.0.1', localPort, 60000, () => cancelled || proc.exitCode !== null);
+            if (promptTask) await promptTask.catch(() => { });
+            if (spawnErr) {
+                tryUnlink(pwFile);
+                try { fs.closeSync(logFd); } catch (e) { }
+                throw new Error(`SSH spawn failed: ${spawnErr.message || String(spawnErr)}`);
+            }
+            if (cancelled) {
+                tryUnlink(pwFile);
+                try { fs.closeSync(logFd); } catch (e) { }
+                throw new Error('SSH host key not trusted');
+            }
+            if (!ready || proc.exitCode !== null) {
+                await forceKill(proc.pid);
+                // plink may keep the pwfile handle open until exit; retry deletion briefly after kill
+                for (let i = 0; i < 20; i++) {
+                    if (tryUnlink(pwFile)) break;
+                    await _sleep(100);
+                }
+                try { fs.closeSync(logFd); } catch (e) { }
+                throw new Error(`SSH tunnel not ready (check ${logPath})`);
+            }
+            tryUnlink(pwFile);
+            return { pid: proc.pid, localPort, logFd, child: proc, logPath };
         }
-        tryUnlink(pwFile);
-        return { pid: proc.pid, localPort, logFd, child: proc, logPath };
     }
 
     const cmd = process.platform === 'win32' ? 'ssh.exe' : 'ssh';
@@ -7162,32 +7183,58 @@ async function startSshDynamicProxy(proxyStr, profileDir, options = {}) {
         '-D', `127.0.0.1:${localPort}`,
         '-p', String(cfg.port),
         '-o', 'ExitOnForwardFailure=yes',
-        '-o', 'BatchMode=yes',
         '-o', `StrictHostKeyChecking=${strictHostKeyChecking}`,
         '-o', `UserKnownHostsFile=${knownHosts}`,
         '-o', `ServerAliveInterval=${cfg.keepAliveInterval}`,
         '-o', 'ServerAliveCountMax=3',
     ];
+    let askpassFiles = null;
+    let env = process.env;
+    if (cfg.password) {
+        args.push('-o', 'BatchMode=no');
+        args.push('-o', 'PreferredAuthentications=password,keyboard-interactive');
+        args.push('-o', 'PubkeyAuthentication=no');
+        if (process.platform !== 'win32') {
+            try {
+                askpassFiles = createUnixSshAskpassFiles(profileDir, cfg.password);
+            } catch (e) {
+                try { fs.closeSync(logFd); } catch (e2) { }
+                throw new Error(`Failed to prepare SSH password auth: ${e.message}`);
+            }
+            env = {
+                ...process.env,
+                SSH_ASKPASS: askpassFiles.askpassPath,
+                SSH_ASKPASS_REQUIRE: 'force',
+                GEEKEZ_SSH_PASSWORD_FILE: askpassFiles.pwFile,
+                DISPLAY: process.env.DISPLAY || '1',
+            };
+        }
+    } else {
+        args.push('-o', 'BatchMode=yes');
+    }
     if (cfg.verbose || String(process.env.GEEKEZ_SSH_VERBOSE || '') === '1') args.push('-v');
     if (cfg.keyPath) {
         args.push('-i', cfg.keyPath, '-o', 'IdentitiesOnly=yes');
     }
     args.push(dest);
 
-    const proc = spawn(cmd, args, { cwd: profileDir, stdio: ['ignore', logFd, logFd], windowsHide: true });
+    const proc = spawn(cmd, args, { cwd: profileDir, stdio: ['ignore', logFd, logFd], windowsHide: true, env });
     let spawnErr = null;
     proc.once('error', (e) => { spawnErr = e; });
 
-    const ready = await waitForTcpPort('127.0.0.1', localPort, 6000, () => proc.exitCode !== null);
+    const ready = await waitForTcpPort('127.0.0.1', localPort, cfg.password ? 60000 : 6000, () => proc.exitCode !== null);
     if (spawnErr) {
+        if (askpassFiles) askpassFiles.cleanup();
         try { fs.closeSync(logFd); } catch (e) { }
         throw new Error(`SSH spawn failed: ${spawnErr.message || String(spawnErr)}`);
     }
     if (!ready || proc.exitCode !== null) {
         await forceKill(proc.pid);
+        if (askpassFiles) askpassFiles.cleanup();
         try { fs.closeSync(logFd); } catch (e) { }
         throw new Error(`SSH tunnel not ready (check ${logPath})`);
     }
+    if (askpassFiles) askpassFiles.cleanup();
     return { pid: proc.pid, localPort, logFd, child: proc, logPath };
 }
 

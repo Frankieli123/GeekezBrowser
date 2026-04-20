@@ -2340,11 +2340,11 @@ function getProxyRemark(link) {
 
 function renderHelpContent() {
     const manualHTML = curLang === 'en' ?
-        `<div style="margin-bottom:25px;"><h4 style="color:var(--accent);margin-bottom:8px;">1. Create Environment</h4><p style="font-size:14px;">Enter a name and proxy link. The system auto-generates a unique fingerprint with randomized Hardware.</p></div>
+        `<div style="margin-bottom:25px;"><h4 style="color:var(--accent);margin-bottom:8px;">1. Create Environment</h4><p style="font-size:14px;">Enter a profile name. Proxy is optional; if provided, the system auto-generates a unique fingerprint with randomized Hardware.</p></div>
          <div style="margin-bottom:25px;"><h4 style="color:var(--accent);margin-bottom:8px;">2. Launch</h4><p style="font-size:14px;">Click Launch. A green badge indicates active status. Each environment is fully isolated.</p></div>
          <div style="margin-bottom:25px;"><h4 style="color:var(--accent);margin-bottom:8px;">3. Pre-Proxy (Optional)</h4><p style="font-size:14px;">Chain proxy for IP hiding. Use TCP protocols for stability.</p></div>
          <div style="margin-bottom:25px;"><h4 style="color:var(--accent);margin-bottom:8px;">4. Best Practices</h4><p style="font-size:14px;">• Use high-quality residential IPs<br>• Keep one account per environment<br>• Avoid frequent switching<br>• Simulate real user behavior</p></div>` :
-        `<div style="margin-bottom:25px;"><h4 style="color:var(--accent);margin-bottom:8px;">1. 新建环境</h4><p style="font-size:14px;">填写名称与代理链接。系统自动生成唯一指纹（硬件随机化）。</p></div>
+        `<div style="margin-bottom:25px;"><h4 style="color:var(--accent);margin-bottom:8px;">1. 新建环境</h4><p style="font-size:14px;">填写环境名称，代理可选；如填写代理，系统会自动生成唯一指纹（硬件随机化）。</p></div>
          <div style="margin-bottom:25px;"><h4 style="color:var(--accent);margin-bottom:8px;">2. 启动环境</h4><p style="font-size:14px;">点击启动，列表中显示绿色运行标签。每个环境完全隔离。</p></div>
          <div style="margin-bottom:25px;"><h4 style="color:var(--accent);margin-bottom:8px;">3. 前置代理（可选）</h4><p style="font-size:14px;">用于隐藏本机IP或链路加速。建议使用TCP协议。</p></div>
          <div style="margin-bottom:25px;"><h4 style="color:var(--accent);margin-bottom:8px;">4. 最佳实践</h4><p style="font-size:14px;">• 使用高质量住宅IP<br>• 一个账号固定一个环境<br>• 避免频繁切换<br>• 模拟真实用户行为</p></div>`;
@@ -3538,7 +3538,7 @@ async function saveNewProfile() {
     const nameBase = document.getElementById('addName').value.trim();
     const proxyBinding = applySavedProxyFallbackToInput('add');
     const savedProxyId = proxyBinding.savedProxyId || '';
-    const proxyText = document.getElementById('addProxy').value.trim();
+    const proxyText = proxyBinding.proxyText || '';
     const tagsStr = document.getElementById('addTags').value;
     const startupUrls = parseStartupUrlsInput(document.getElementById('addStartupUrls').value);
     const headerPresetId = document.getElementById('addHeaderPresetId').value || '';
@@ -3577,25 +3577,27 @@ async function saveNewProfile() {
 
     // 分割多行代理链接
     const proxyLines = proxyText.split('\n').map(l => l.trim()).filter(l => l);
+    const createDirectProfile = proxyLines.length === 0;
 
     if (savedProxyId && proxyLines.length > 1) {
         return showAlert(t('savedProxyBatchNotSupported'));
     }
-    if (proxyLines.length === 0) {
+    if (createDirectProfile && !nameBase) {
         return showAlert(t('inputReq'));
     }
     if (!await confirmProxySaveIfNeeded('add')) return;
 
     // 批量创建环境
     let createdCount = 0;
-    for (let i = 0; i < proxyLines.length; i++) {
-        const proxyStr = proxyLines[i];
+    const profileInputs = createDirectProfile ? [''] : proxyLines;
+    for (let i = 0; i < profileInputs.length; i++) {
+        const proxyStr = profileInputs[i];
         let name;
 
         if (!nameBase) {
             // 无名称输入，使用代理备注
             name = getProxyRemark(proxyStr) || `Profile-${String(i + 1).padStart(2, '0')}`;
-        } else if (proxyLines.length === 1) {
+        } else if (profileInputs.length === 1) {
             // 单个代理，使用输入名称
             name = nameBase;
         } else {
@@ -3616,7 +3618,7 @@ async function saveNewProfile() {
     closeAddModal();
     await loadProfiles();
 
-    if (proxyLines.length > 1) {
+    if (profileInputs.length > 1) {
         showAlert(`${t('msgBatchCreated') || '批量创建成功'}: ${createdCount} ${t('msgProfiles') || '个环境'}`);
     }
 }

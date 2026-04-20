@@ -959,6 +959,18 @@
             height: 75vh;
         }
 
+        #addModal .modal-content {
+            width: 560px;
+            max-width: 92vw;
+        }
+
+        #addModal .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
         #confirmModal .modal-content,
         #alertModal .modal-content {
             width: 350px;
@@ -1796,7 +1808,7 @@
                 <label data-i18n="proxyLink" style="font-size:11px; font-weight:bold; opacity:0.8;">Proxy</label>
                 <textarea id="addProxy" rows="4" placeholder="vmess://, ss://... (one per line for batch)"
                     spellcheck="false" autocomplete="off"></textarea>
-                <div style="font-size:10px; opacity:0.5; margin-bottom:8px;" data-i18n="batchHint">Multiple links =
+                <div style="font-size:10px; opacity:0.5; margin-bottom:8px;" data-i18n="batchHint">Proxy is optional. Multiple links =
                     batch create profiles</div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:-2px 0 10px;">
                     <button type="button" class="outline" onclick="testAddProxyConfig()" data-i18n="proxyTestBtn">Test Proxy</button>
